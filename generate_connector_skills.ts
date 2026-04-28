@@ -13,6 +13,7 @@ import { fileURLToPath } from "url";
 
 import fs from "fs/promises";
 import { randomUUID } from "crypto";
+import { RunTracer, type ToolDef } from "./tracer.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
 const RUN_ID = randomUUID();
@@ -162,6 +163,32 @@ Start now with Step 1.
 }
 
 // ---------------------------------------------------------------------------
+// OpenTelemetry env — sends traces/metrics/logs to local Jaeger.
+// Start Jaeger: docker run -d --name jaeger -p 16686:16686 -p 4318:4318 jaegertracing/all-in-one:latest
+// View traces:  http://localhost:16686
+//
+// env replaces process.env inside the SDK subprocess, so spread process.env
+// first to preserve PATH, ANTHROPIC_API_KEY, etc.
+// ---------------------------------------------------------------------------
+const otelEnv: Record<string, string> = {
+  CLAUDE_CODE_ENABLE_TELEMETRY: "1",
+  CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1",
+  OTEL_TRACES_EXPORTER: "otlp",
+  OTEL_METRICS_EXPORTER: "otlp",
+  OTEL_LOGS_EXPORTER: "otlp",
+  OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf",
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://localhost:4318",
+  OTEL_TRACES_EXPORT_INTERVAL: "1000",
+  OTEL_METRIC_EXPORT_INTERVAL: "5000",
+  OTEL_LOGS_EXPORT_INTERVAL: "1000",
+  OTEL_LOG_TOOL_DETAILS: "1",       // tool names, file paths, commands in span attrs
+  OTEL_LOG_USER_PROMPTS: "1",       // user prompt text on interaction span
+  OTEL_LOG_TOOL_CONTENT: "1",       // full tool input+output bodies (truncated at 60KB)
+  OTEL_LOG_RAW_API_BODIES: `file:/tmp/otel_bodies_${RUN_ID}`,  // full API request/response JSON written to disk
+  OTEL_SERVICE_NAME: "skill-builder",
+};
+
+// ---------------------------------------------------------------------------
 // Stream helper
 // ---------------------------------------------------------------------------
 async function runConnector(connector: string, months: number): Promise<void> {
@@ -170,9 +197,25 @@ async function runConnector(connector: string, months: number): Promise<void> {
   console.log("=".repeat(60));
 
   let totalCost = 0;
+  const prompt = buildPrompt(connector, months);
 
-  for await (const message of query({
-    prompt: buildPrompt(connector, months),
+  const availableTools: ToolDef[] = [
+    { name: "Bash",  type: "builtin", description: "Run shell commands" },
+    { name: "Read",  type: "builtin", description: "Read file contents" },
+    { name: "Write", type: "builtin", description: "Write file contents" },
+    {
+      name: "Agent",
+      type: "subagent",
+      description: TICKET_BATCH_ANALYZER.description,
+      model: TICKET_BATCH_ANALYZER.model,
+      tools: TICKET_BATCH_ANALYZER.tools as string[],
+    },
+  ];
+
+  const tracer = new RunTracer(connector, months, RUN_ID, prompt, availableTools);
+
+  for await (const message of tracer.capture(query({
+    prompt,
     options: {
       model: "claude-sonnet-4-6",
       settingSources: ["user"],
@@ -183,8 +226,9 @@ async function runConnector(connector: string, months: number): Promise<void> {
       agents: {
         "ticket-batch-analyzer": TICKET_BATCH_ANALYZER,
       },
+      env: { ...process.env, ...otelEnv },
     },
-  })) {
+  }))) {
     const msg = message as SDKMessage;
 
     if (msg.type === "assistant") {
@@ -199,6 +243,13 @@ async function runConnector(connector: string, months: number): Promise<void> {
       totalCost += result.total_cost_usd ?? 0;
       const models = Object.keys(result.modelUsage ?? {}).join(", ");
       console.log(`\n\n[${connector}] done — success=${!result.is_error}, duration=${result.duration_ms}ms, cost=$${result.total_cost_usd?.toFixed(4)}, models=${models}`);
+      await tracer.loadBodies();
+      const htmlPath = await tracer.writeReport(
+        path.join(SKILL_DIR, connector),
+        result.total_cost_usd ?? undefined,
+        result.duration_ms ?? undefined,
+      );
+      console.log(`[${connector}] trace → ${htmlPath}`);
     }
   }
 }
