@@ -9,8 +9,13 @@ import snowflake from "snowflake-sdk";
 import fs from "fs/promises";
 import path from "path";
 import { config as loadEnv } from "dotenv";
+import os from "os";
 
-loadEnv();
+// Load creds from atlas repo .env
+loadEnv({ path: path.join(os.homedir(), "Downloads/repos/atlas/.env") });
+
+// Suppress verbose SDK connection logs
+snowflake.configure({ logLevel: "ERROR" } as any);
 
 // ---------------------------------------------------------------------------
 // Connector name → Snowflake custom field value
@@ -73,8 +78,8 @@ function adaptSql(rawSql: string, months: number): string {
     rawSql
       // Python %% escape → plain %
       .replace(/%%/g, "%")
-      // Python-style named param → positional bind[0]
-      .replace("%(connector_value)s", "?")
+      // Python-style named param → positional bind[0] (appears in comment + WHERE, replace all)
+      .replaceAll("%(connector_value)s", "?")
       // Inject date filter as bind[1] right after the connector value line
       .replace(
         "AND f.value['value']::VARCHAR = ?",
@@ -84,16 +89,20 @@ function adaptSql(rawSql: string, months: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Snowflake connection
+// Snowflake connection (private key auth from atlas .env)
 // ---------------------------------------------------------------------------
-function createConnection(): snowflake.Connection {
+async function createConnection(): Promise<snowflake.Connection> {
+  const privateKeyPath = process.env.SNOWFLAKE_PRIVATE_KEY_PATH!;
+  const privateKeyPem = await fs.readFile(privateKeyPath, "utf8");
+
   return snowflake.createConnection({
     account: process.env.SNOWFLAKE_ACCOUNT!,
     username: process.env.SNOWFLAKE_USER!,
-    password: process.env.SNOWFLAKE_PASSWORD!,
-    database: "HEVO_ANALYTICS",
-    schema: "RAW",
-    warehouse: "COMPUTE_WH",
+    authenticator: "SNOWFLAKE_JWT",
+    privateKey: privateKeyPem,
+    database: process.env.SNOWFLAKE_DATABASE ?? "HEVO_ANALYTICS",
+    schema: process.env.SNOWFLAKE_SCHEMA ?? "RAW",
+    warehouse: process.env.SNOWFLAKE_WAREHOUSE ?? "COMPUTE_WH",
   });
 }
 
@@ -171,7 +180,7 @@ async function main(): Promise<void> {
   const sql = adaptSql(rawSql, months);
   const binds: snowflake.Binds = [connectorValue, -months];
 
-  const conn = createConnection();
+  const conn = await createConnection();
   await connect(conn);
 
   console.log("Connected to Snowflake. Running query...");
