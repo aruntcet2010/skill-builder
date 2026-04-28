@@ -12,12 +12,11 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 import fs from "fs/promises";
+import { randomUUID } from "crypto";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
-const HEVO_AGENT_REPO = path.resolve(REPO_ROOT, "../hevo-connector-agent");
-// Write to a regular directory to avoid .claude/ permission hooks during generation.
-// Move to .claude/skills/connector-oncall/ manually when ready.
-const SKILL_DIR = path.join(HEVO_AGENT_REPO, "connector-oncall-skills");
+const RUN_ID = randomUUID();
+const SKILL_DIR = path.join(REPO_ROOT, "generated", RUN_ID, "connector-oncall");
 
 // Process smallest connectors first for faster feedback
 const ALL_CONNECTORS = [
@@ -253,6 +252,7 @@ async function main(): Promise<void> {
   const months = monthsFlag !== -1 ? parseInt(args[monthsFlag + 1], 10) : 6;
 
   console.log(`Generating skills for: ${connectors.join(", ")} (last ${months} month(s))`);
+  console.log(`Run ID: ${RUN_ID}`);
   console.log(`Output: ${SKILL_DIR}/`);
 
   const completed: string[] = [];
