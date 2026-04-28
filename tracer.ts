@@ -115,6 +115,20 @@ function extractSystemPrompt(req: Record<string, unknown>): string {
     : String(sys);
 }
 
+function extractToolDefs(req: Record<string, unknown>, fallback: ToolDef[]): ToolDef[] {
+  const raw: any[] = (req as any).tools ?? [];
+  if (!raw.length) return fallback;
+  // Preserve type/model/tools metadata from the original ToolDef list by matching on name
+  const metaByName = new Map(fallback.map(t => [t.name, t]));
+  return raw.map((t: any) => ({
+    name: t.name ?? "",
+    description: t.description ?? "",
+    type: metaByName.get(t.name)?.type ?? "builtin",
+    model: metaByName.get(t.name)?.model,
+    tools: metaByName.get(t.name)?.tools,
+  }));
+}
+
 function buildMessages(req: Record<string, unknown>): ApiMessage[] {
   return ((req as any).messages ?? []).map((m: any) => ({
     role: m.role as "user" | "assistant",
@@ -126,6 +140,7 @@ function buildMessages(req: Record<string, unknown>): ApiMessage[] {
 export class RunTracer {
   private turns: Turn[] = [];
   private subagentTurns: Turn[] = [];
+  private realTools: ToolDef[] = [];   // actual tool defs extracted from request bodies
   private startMs = Date.now();
 
   constructor(
@@ -257,6 +272,10 @@ export class RunTracer {
         turn.costUsd = calcCost(turn.model, inTokens, realOut, cacheRead, cacheCreate);
         turn.systemPrompt = extractSystemPrompt(req);
         turn.messages = buildMessages(req);
+        // Extract real tool definitions from the first matched request
+        if (!this.realTools.length) {
+          this.realTools = extractToolDefs(req, this.availableTools);
+        }
         turnByFp.delete(fp); // prevent duplicate matches
       } else {
         // Not a main-agent call — classify as subagent if user message differs from our prompt
@@ -316,7 +335,7 @@ export class RunTracer {
       runId: this.runId,
       startedAt: new Date(this.startMs).toISOString(),
       prompt: this.prompt,
-      availableTools: this.availableTools,
+      availableTools: this.realTools.length ? this.realTools : this.availableTools,
       turns: this.turns,
       subagentTurns: this.subagentTurns,
       totalCostUsd: totalCostUsd ?? this.turns.reduce((s, t) => s + t.costUsd, 0),
