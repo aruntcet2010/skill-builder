@@ -57,8 +57,7 @@ Rules:
 - If a ticket has no useful signal (e.g. spam, test ticket), skip it`,
   // No tools needed — subagent works only with the inline ticket data in its prompt
   tools: [],
-  // Haiku is fast and cheap for structured extraction
-  model: "claude-haiku-4-5-20251001",
+  model: "claude-sonnet-4-6",
 };
 
 // ---------------------------------------------------------------------------
