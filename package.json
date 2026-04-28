@@ -3,12 +3,17 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "test-sdk": "npx tsx test_sdk_claude_code_auth.ts"
+    "test-sdk": "npx tsx test_sdk_claude_code_auth.ts",
+    "fetch-tickets": "npx tsx scripts/fetch_raw_tickets.ts",
+    "generate-skills": "npx tsx generate_connector_skills.ts"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.121"
+    "@anthropic-ai/claude-agent-sdk": "^0.2.121",
+    "dotenv": "^17.4.2",
+    "snowflake-sdk": "^2.4.0"
   },
   "devDependencies": {
+    "@types/snowflake-sdk": "^1.6.24",
     "tsx": "^4.19.2",
     "typescript": "^5.8.3"
   }
