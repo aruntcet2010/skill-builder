@@ -3,8 +3,10 @@
  * One skill per connector in cdk-patterns format.
  *
  * Usage:
- *   npx tsx generate_connector_skills.ts                    # all connectors
- *   npx tsx generate_connector_skills.ts --connector hubspot # one connector
+ *   npx tsx generate_connector_skills.ts                          # all connectors
+ *   npx tsx generate_connector_skills.ts --connector hubspot      # one connector
+ *   npx tsx generate_connector_skills.ts --months 3               # last 3 months
+ *   npx tsx generate_connector_skills.ts --no-preset              # minimal system prompt (default: claude_code preset)
  */
 
 import { query, type SDKMessage, type SDKAssistantMessage, type SDKResultMessage, type AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
@@ -191,7 +193,7 @@ const otelEnv: Record<string, string> = {
 // ---------------------------------------------------------------------------
 // Stream helper
 // ---------------------------------------------------------------------------
-async function runConnector(connector: string, months: number): Promise<void> {
+async function runConnector(connector: string, months: number, usePreset: boolean): Promise<void> {
   console.log(`\n${"=".repeat(60)}`);
   console.log(`Generating skill for: ${connector} (last ${months} month(s))`);
   console.log("=".repeat(60));
@@ -218,6 +220,7 @@ async function runConnector(connector: string, months: number): Promise<void> {
     prompt,
     options: {
       model: "claude-sonnet-4-6",
+      ...(usePreset && { systemPrompt: { type: "preset", preset: "claude_code" } }),
       settingSources: ["user"],
       allowedTools: ["Bash", "Read", "Write", "Agent"],
       permissionMode: "acceptEdits",
@@ -302,7 +305,10 @@ async function main(): Promise<void> {
   const monthsFlag = args.indexOf("--months");
   const months = monthsFlag !== -1 ? parseInt(args[monthsFlag + 1], 10) : 6;
 
+  const usePreset = !args.includes("--no-preset");
+
   console.log(`Generating skills for: ${connectors.join(", ")} (last ${months} month(s))`);
+  console.log(`System prompt: ${usePreset ? "claude_code preset" : "minimal (default)"}`);
   console.log(`Run ID: ${RUN_ID}`);
   console.log(`Output: ${SKILL_DIR}/`);
 
@@ -313,7 +319,7 @@ async function main(): Promise<void> {
       console.error(`Unknown connector: ${connector}. Valid: ${ALL_CONNECTORS.join(", ")}`);
       process.exit(1);
     }
-    await runConnector(connector, months);
+    await runConnector(connector, months, usePreset);
     completed.push(connector);
   }
 

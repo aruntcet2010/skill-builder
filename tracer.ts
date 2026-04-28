@@ -227,51 +227,45 @@ export class RunTracer {
     }
     if (!pairs.length) return;
 
-    // Classify each pair as main-agent or subagent by checking whether the first real user
-    // message contains the initial prompt we sent to query(). Subagents have a different
-    // user message (e.g. "Read and analyze these ticket files...").
-    const promptPrefix = this.prompt.substring(0, 60);
-    const mainPairs: Pair[] = [];
+    // Build a fingerprint → turn lookup from the tracer's captured turns.
+    // These fingerprints are ground truth: only real main-agent LLM calls are in this.turns
+    // (forwarded subagent messages are already excluded via parent_tool_use_id filtering).
+    // Any body pair whose fingerprint matches a tracer turn IS a main-agent pair.
+    // Anything that doesn't match is either a subagent call or an internal CC call (title-gen, etc.).
+    const turnByFp = new Map<string, Turn>();
+    for (const t of this.turns) {
+      const fp = `${t.inputTokens}:${t.cacheReadTokens}:${t.cacheCreationTokens}`;
+      if (!turnByFp.has(fp)) turnByFp.set(fp, t);
+    }
+
     const subPairs: Pair[] = [];
+    const promptPrefix = this.prompt.substring(0, 40);
 
-    for (const pair of pairs) {
-      const firstUser = extractFirstUserText(pair.req);
-      if (firstUser.includes(promptPrefix.substring(0, 40))) {
-        mainPairs.push(pair);
-      } else if (firstUser.trim()) {
-        subPairs.push(pair);
-      }
-      // empty firstUser = internal Claude Code call, skip
-    }
-
-    // System prompt: longest system block among main-agent requests
-    let mainSystemPrompt = "";
-    for (const { req } of mainPairs) {
-      const sys = extractSystemPrompt(req);
-      if (sys.length > mainSystemPrompt.length) mainSystemPrompt = sys;
-    }
-
-    // Match main-agent pairs to tracer turns by input fingerprint.
-    // SDK reports output_tokens as a tiny per-block delta, not the full total.
-    for (const { req, res } of mainPairs) {
+    for (const { req, res } of pairs) {
       const u = (res as any).usage ?? {};
       const inTokens: number = u.input_tokens ?? 0;
       const cacheRead: number = u.cache_read_input_tokens ?? 0;
       const cacheCreate: number = u.cache_creation_input_tokens ?? 0;
       const realOut: number = u.output_tokens ?? 0;
 
-      const turn = this.turns.find(
-        t => t.inputTokens === inTokens &&
-             t.cacheReadTokens === cacheRead &&
-             t.cacheCreationTokens === cacheCreate &&
-             !t.messages,
-      );
-      if (!turn) continue;
+      const fp = `${inTokens}:${cacheRead}:${cacheCreate}`;
+      const turn = turnByFp.get(fp);
 
-      turn.outputTokens = realOut;
-      turn.costUsd = calcCost(turn.model, inTokens, realOut, cacheRead, cacheCreate);
-      turn.systemPrompt = mainSystemPrompt;
-      turn.messages = buildMessages(req);
+      if (turn && !turn.messages) {
+        // Matched a main-agent turn — enrich it
+        turn.outputTokens = realOut;
+        turn.costUsd = calcCost(turn.model, inTokens, realOut, cacheRead, cacheCreate);
+        turn.systemPrompt = extractSystemPrompt(req);
+        turn.messages = buildMessages(req);
+        turnByFp.delete(fp); // prevent duplicate matches
+      } else {
+        // Not a main-agent call — classify as subagent if user message differs from our prompt
+        const firstUser = extractFirstUserText(req);
+        if (firstUser.trim() && !firstUser.includes(promptPrefix)) {
+          subPairs.push({ req, res });
+        }
+        // else: internal CC call (title-gen, permission checks, etc.) — skip silently
+      }
     }
 
     // Parse subagent pairs into Turn objects
