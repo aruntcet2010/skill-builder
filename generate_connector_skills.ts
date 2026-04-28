@@ -7,7 +7,7 @@
  *   npx tsx generate_connector_skills.ts --connector hubspot # one connector
  */
 
-import { query, type SDKMessage, type SDKAssistantMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query, type SDKMessage, type SDKAssistantMessage, type SDKResultMessage, type AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -30,72 +30,76 @@ const ALL_CONNECTORS = [
 ];
 
 // ---------------------------------------------------------------------------
-// Prompt
+// Subagent definition — ticket batch analyzer
+// ---------------------------------------------------------------------------
+const TICKET_BATCH_ANALYZER: AgentDefinition = {
+  description:
+    "Analyzes a batch of raw Zendesk support tickets and extracts distinct issues as a JSON array. " +
+    "Use this agent for each batch of 50 tickets that needs to be processed in parallel.",
+  prompt: `You are a support ticket analyst. You will receive a batch of raw Zendesk tickets as JSON.
+
+Your job: extract every distinct issue present across these tickets.
+
+For each distinct issue return a JSON object with these fields:
+- title: concise issue title (max 15 words)
+- severity: "critical" | "high" | "medium" | "low" (use the highest seen across related tickets)
+- components: string array of affected components or areas
+- description: what the customer experiences (2-3 sentences)
+- root_cause: technical root cause (2-3 sentences)
+- resolution: how to fix or work around it (2-3 sentences)
+- customer_impact: business impact on the customer (1-2 sentences)
+- ticket_ids: string array of ticket IDs in this batch that relate to this issue
+
+Rules:
+- Group tickets that share the same underlying root cause into one issue
+- One ticket can only belong to one issue (pick the best match)
+- Return ONLY a valid JSON array — no markdown, no explanation, no code fences
+- If a ticket has no useful signal (e.g. spam, test ticket), skip it`,
+  // No tools needed — subagent works only with the inline ticket data in its prompt
+  tools: [],
+  // Haiku is fast and cheap for structured extraction
+  model: "claude-haiku-4-5-20251001",
+};
+
+// ---------------------------------------------------------------------------
+// Main agent prompt
 // ---------------------------------------------------------------------------
 function buildPrompt(connector: string): string {
   return `
 You are generating a Claude Code skill for the "${connector}" connector from historical Zendesk support tickets.
 
-## Your Task
-
 Work through these steps in order:
 
-### Step 1 — Fetch tickets
-Run this command to fetch the last 6 months of tickets:
+## Step 1 — Fetch tickets
 \`\`\`
 npx tsx ${REPO_ROOT}/scripts/fetch_raw_tickets.ts --connector ${connector} --months 6 --output /tmp/${connector}_raw_tickets.json
 \`\`\`
 
-### Step 2 — Check ticket count
-\`\`\`
-jq length /tmp/${connector}_raw_tickets.json
-\`\`\`
+## Step 2 — Read the ticket file
+Read /tmp/${connector}_raw_tickets.json and check how many tickets there are.
+If 0 tickets, write a minimal SKILL.md saying no tickets found and stop.
 
-### Step 3 — Process tickets in parallel batches of 50
+## Step 3 — Spawn parallel batch subagents
+Divide the tickets into batches of 50. Invoke the "ticket-batch-analyzer" subagent for EVERY batch IN PARALLEL in a single response — do not wait for one to finish before starting the next.
 
-Read the full ticket JSON file. Divide tickets into batches of 50 (or fewer for the last batch).
+For each batch subagent call, pass the ticket objects as the prompt:
+"Analyze these tickets and return issues as JSON:\n<paste the 50 ticket objects as JSON>"
 
-Spawn ALL batch subagents IN PARALLEL using the Agent tool in a single response. For each batch, give the subagent this task:
+Collect the JSON array returned by each subagent.
 
-> You are analyzing a batch of Zendesk support tickets for the "${connector}" connector.
-> Extract every distinct issue you find across these tickets. For each distinct issue, return:
-> - title: concise issue title (max 15 words)
-> - severity: critical | high | medium | low (use highest seen across tickets)
-> - components: array of affected components/areas
-> - description: what the customer experiences (2-3 sentences)
-> - root_cause: technical root cause (2-3 sentences)
-> - resolution: how to fix it (2-3 sentences)
-> - customer_impact: business impact on the customer (1-2 sentences)
-> - ticket_ids: array of ticket IDs from this batch that relate to this issue
->
-> Return ONLY a valid JSON array. No explanation.
->
-> Tickets:
-> [PASTE THE 50 TICKET OBJECTS HERE AS JSON]
+## Step 4 — Consolidate
+Merge all subagent results into one master issue list:
+- Issues with the same root cause → merge (combine ticket_ids, keep highest severity)
+- Sort by number of ticket_ids descending (most frequent first)
 
-Each subagent returns a JSON array of issues. Collect all results.
+## Step 5 — Categorize into 6–10 groups
+Group issues into 6–10 categories an oncall engineer would recognise.
+Use lowercase-hyphenated slugs (e.g. "connection-auth", "replication-cdc", "data-types", "schema-mapping").
 
-### Step 4 — Consolidate issues
+## Step 6 — Write skill files
+Output base: \`${SKILLS_OUTPUT_DIR}/${connector}-oncall/\`
 
-Merge the results from all subagents into one master issue list:
-- Issues with the same root cause → merge them (combine ticket_ids arrays, keep highest severity)
-- Keep all unique issues
-- Sort by ticket_ids length descending (most common issues first)
-
-### Step 5 — Categorize into 6–10 groups
-
-Group the consolidated issues into 6–10 logical categories an oncall engineer would recognise (e.g. "connection-auth", "replication-cdc", "data-types", "performance-rate-limiting", "schema-mapping", "object-sync" etc). Use lowercase-hyphenated slugs.
-
-### Step 6 — Write skill files
-
-Write the following files using the exact formats below.
-
-**Output base:** \`${SKILLS_OUTPUT_DIR}/${connector}-oncall/\`
-
----
-
-#### SKILL.md format
-
+### SKILL.md
 \`\`\`
 ---
 name: ${connector}-oncall
@@ -110,71 +114,48 @@ description: Historical oncall patterns for the ${connector} connector (last 6 m
 
 | Category | Description | Guide | Issues |
 |----------|-------------|-------|--------|
-| **{Name}** | {one-liner description} | [patterns/{slug}/selection.md](patterns/{slug}/selection.md) | {count} |
-...one row per category...
+| **{Name}** | {one-liner} | [patterns/{slug}/selection.md](patterns/{slug}/selection.md) | {count} |
 
 ## How to Use
-
-1. Find the category that matches the customer's symptom in the table above
-2. Read \`selection.md\` — it maps error messages and symptoms to specific issues
-3. Read \`issues.md\` — full root cause, resolution, and customer impact for each issue
+1. Find the category matching the symptom
+2. Read selection.md — maps symptoms/errors to issue numbers
+3. Read issues.md — root cause, resolution, customer impact
 \`\`\`
 
----
-
-#### patterns/{slug}/selection.md format
-
+### patterns/{slug}/selection.md
 \`\`\`
 # {Category Name} — Selection Guide
 
 ## Symptom → Issue Mapping
-
-→ **"{error keyword or message}"** → Issue {N}: {title}
-→ **"{component or behaviour}"** → Issue {N}: {title}
-...list the most common symptoms mapped to issue numbers...
+→ **"{error keyword}"** → Issue {N}: {title}
 
 ## All Issues (most frequent first)
-
 | # | Title | Severity | Tickets |
 |---|-------|----------|---------|
 | {N} | {title} | {severity} | {count} |
-...
 
-→ Full details in [issues.md](issues.md)
+→ Full details: [issues.md](issues.md)
 \`\`\`
 
----
-
-#### patterns/{slug}/issues.md format
-
+### patterns/{slug}/issues.md
 \`\`\`
 # {Category Name} — Full Issue Details
 
 ## Issue {N}: {title}
-
-**Severity:** {X} | **Tickets:** {Y} | **Components:** {A, B, C}
+**Severity:** {X} | **Tickets:** {Y} | **Components:** {A, B}
 
 **Description:** ...
-
 **Root Cause:** ...
-
 **Resolution:** ...
-
 **Customer Impact:** ...
 
 ---
-...one block per issue in this category...
 \`\`\`
 
----
-
-## Important Notes
-
+Rules:
+- Issue numbers in selection.md must match ## Issue N: headers in issues.md
+- Use actual error keywords from ticket descriptions in the Symptom → Issue Mapping
 - Write each file completely before moving to the next
-- Use the exact frontmatter format for SKILL.md (the --- delimiters and name/description fields are required)
-- Issue numbers in selection.md must match the ## Issue N: headers in issues.md
-- Symptom → Issue Mapping should use keywords from actual error messages and descriptions found in the tickets
-- If ticket count is 0, write a minimal skill saying no tickets found in the last 6 months
 
 Start now with Step 1.
 `.trim();
@@ -199,6 +180,9 @@ async function runConnector(connector: string): Promise<void> {
       permissionMode: "acceptEdits",
       maxTurns: 300,
       cwd: REPO_ROOT,
+      agents: {
+        "ticket-batch-analyzer": TICKET_BATCH_ANALYZER,
+      },
     },
   })) {
     const msg = message as SDKMessage;
