@@ -87,7 +87,7 @@ Read /tmp/${connector}_tickets/metadata.md to get the full list of ticket filena
 If 0 tickets, write ${connectorDir}/selection.md with a single line: "No tickets found in the last 6 months." and stop.
 
 ## Step 3 — Spawn parallel batch subagents
-Divide the ticket filenames into batches of 50. Invoke the "ticket-batch-analyzer" subagent for EVERY batch IN PARALLEL in a single response — do not wait for one to finish before starting the next.
+Divide the ticket filenames into batches of 5. Invoke the "ticket-batch-analyzer" subagent for EVERY batch IN PARALLEL in a single response — do not wait for one to finish before starting the next.
 
 For each batch subagent call, pass the list of full file paths as the prompt:
 "Read and analyze these ticket files, return issues as JSON:

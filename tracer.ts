@@ -60,6 +60,11 @@ interface Turn {
   messages?: ApiMessage[];
 }
 
+export interface SubagentGroup {
+  turns: Turn[];
+  tools: ToolDef[];
+}
+
 export interface ConnectorTrace {
   connector: string;
   months: number;
@@ -67,9 +72,8 @@ export interface ConnectorTrace {
   startedAt: string;
   prompt: string;
   availableTools: ToolDef[];
-  subagentAvailableTools: ToolDef[];
   turns: Turn[];
-  subagentTurns: Turn[];
+  subagentGroups: SubagentGroup[];
   totalCostUsd: number;
   totalDurationMs: number;
 }
@@ -140,9 +144,8 @@ function buildMessages(req: Record<string, unknown>): ApiMessage[] {
 // ── Tracer ────────────────────────────────────────────────────────────────────
 export class RunTracer {
   private turns: Turn[] = [];
-  private subagentTurns: Turn[] = [];
   private realTools: ToolDef[] = [];
-  private subagentRealTools: ToolDef[] = [];
+  private subagentGroups: SubagentGroup[] = [];
   private startMs = Date.now();
 
   constructor(
@@ -289,47 +292,59 @@ export class RunTracer {
       }
     }
 
-    // Parse subagent pairs into Turn objects
-    let subSeq = 0;
-    let subSystemPrompt = "";
-    for (const { req, res } of subPairs) {
-      if (!this.subagentRealTools.length) {
-        this.subagentRealTools = extractToolDefs(req, []);
-      }
-      subSeq++;
-      const u = (res as any).usage ?? {};
-      const inTokens: number = u.input_tokens ?? 0;
-      const cacheRead: number = u.cache_read_input_tokens ?? 0;
-      const cacheCreate: number = u.cache_creation_input_tokens ?? 0;
-      const outTokens: number = u.output_tokens ?? 0;
-      const model: string = (res as any).model ?? "";
+    // Group subagent pairs by first user message — same initial prompt = same subagent instance.
+    // This correctly handles parallel subagents whose body files are interleaved by mtime.
+    type Pair = { req: Record<string, unknown>; res: Record<string, unknown> };
+    const groupMap = new Map<string, Pair[]>();
+    for (const pair of subPairs) {
+      const firstUser = extractFirstUserText(pair.req).slice(0, 300);
+      if (!groupMap.has(firstUser)) groupMap.set(firstUser, []);
+      groupMap.get(firstUser)!.push(pair);
+    }
 
-      let text = "";
-      const toolUses: ToolUse[] = [];
-      for (const block of (res as any).content ?? []) {
-        if (block.type === "text") text += block.text ?? "";
-        else if (block.type === "tool_use") {
-          toolUses.push({ id: block.id, name: block.name, input: block.input ?? {} });
+    for (const pairs of groupMap.values()) {
+      const tools = extractToolDefs(pairs[0].req, []);
+      const turns: Turn[] = [];
+      let seq = 0;
+      let systemPrompt = "";
+
+      for (const { req, res } of pairs) {
+        seq++;
+        const u = (res as any).usage ?? {};
+        const inTokens: number = u.input_tokens ?? 0;
+        const cacheRead: number = u.cache_read_input_tokens ?? 0;
+        const cacheCreate: number = u.cache_creation_input_tokens ?? 0;
+        const outTokens: number = u.output_tokens ?? 0;
+        const model: string = (res as any).model ?? "";
+
+        let text = "";
+        const toolUses: ToolUse[] = [];
+        for (const block of (res as any).content ?? []) {
+          if (block.type === "text") text += block.text ?? "";
+          else if (block.type === "tool_use") {
+            toolUses.push({ id: block.id, name: block.name, input: block.input ?? {} });
+          }
         }
+
+        if (!systemPrompt) systemPrompt = extractSystemPrompt(req);
+
+        turns.push({
+          seq,
+          model,
+          text: text.trim(),
+          toolUses,
+          inputTokens: inTokens,
+          outputTokens: outTokens,
+          cacheReadTokens: cacheRead,
+          cacheCreationTokens: cacheCreate,
+          costUsd: calcCost(model, inTokens, outTokens, cacheRead, cacheCreate),
+          stopReason: (res as any).stop_reason ?? "",
+          elapsedMs: 0,
+          systemPrompt,
+          messages: buildMessages(req),
+        });
       }
-
-      if (!subSystemPrompt) subSystemPrompt = extractSystemPrompt(req);
-
-      this.subagentTurns.push({
-        seq: subSeq,
-        model,
-        text: text.trim(),
-        toolUses,
-        inputTokens: inTokens,
-        outputTokens: outTokens,
-        cacheReadTokens: cacheRead,
-        cacheCreationTokens: cacheCreate,
-        costUsd: calcCost(model, inTokens, outTokens, cacheRead, cacheCreate),
-        stopReason: (res as any).stop_reason ?? "",
-        elapsedMs: 0,
-        systemPrompt: subSystemPrompt,
-        messages: buildMessages(req),
-      });
+      this.subagentGroups.push({ turns, tools });
     }
   }
 
@@ -341,9 +356,8 @@ export class RunTracer {
       startedAt: new Date(this.startMs).toISOString(),
       prompt: this.prompt,
       availableTools: this.realTools.length ? this.realTools : this.availableTools,
-      subagentAvailableTools: this.subagentRealTools,
       turns: this.turns,
-      subagentTurns: this.subagentTurns,
+      subagentGroups: this.subagentGroups,
       totalCostUsd: totalCostUsd ?? this.turns.reduce((s, t) => s + t.costUsd, 0),
       totalDurationMs: totalDurationMs ?? Date.now() - this.startMs,
     };
@@ -597,19 +611,22 @@ function callCard(turn: Turn, totalCost: number, prompt: string, tools: ToolDef[
 
 function summaryTable(trace: ConnectorTrace): string {
   const n = trace.turns.length;
-  const ns = trace.subagentTurns.length;
   const dur = fmtDuration(trace.totalDurationMs);
   const mainCost = trace.turns.reduce((s, t) => s + t.costUsd, 0);
-  const subCost = trace.subagentTurns.reduce((s, t) => s + t.costUsd, 0);
   const total = trace.totalCostUsd;
 
-  const subRow = ns > 0
-    ? `<tr data-anchor="subagent">
-      <td>Subagent</td><td>${ns}</td>
-      <td>$${subCost.toFixed(4)}</td>
-      <td>${costBar(subCost, total)}</td>
-    </tr>`
-    : "";
+  const subRows = trace.subagentGroups.map((g, i) => {
+    const ns = g.turns.length;
+    const cost = g.turns.reduce((s, t) => s + t.costUsd, 0);
+    const label = trace.subagentGroups.length > 1 ? `Subagent ${i + 1}` : "Subagent";
+    return `<tr data-anchor="subagent-${i}">
+      <td>${label}</td><td>${ns}</td>
+      <td>$${cost.toFixed(4)}</td>
+      <td>${costBar(cost, total)}</td>
+    </tr>`;
+  }).join("");
+
+  const totalCalls = n + trace.subagentGroups.reduce((s, g) => s + g.turns.length, 0);
 
   return `<table class="summary-table">
   <thead><tr><th>Context</th><th>LLM Calls</th><th>Cost</th><th>Share</th></tr></thead>
@@ -619,10 +636,10 @@ function summaryTable(trace: ConnectorTrace): string {
       <td>$${mainCost.toFixed(4)}</td>
       <td>${costBar(mainCost, total)}</td>
     </tr>
-    ${subRow}
+    ${subRows}
     <tr class="total">
       <td>Total &nbsp;<span style="font-weight:400;font-size:11px;color:var(--text-dim)">${dur}</span></td>
-      <td>${n + ns}</td><td>$${total.toFixed(4)}</td><td></td>
+      <td>${totalCalls}</td><td>$${total.toFixed(4)}</td><td></td>
     </tr>
   </tbody>
 </table>`;
@@ -631,26 +648,28 @@ function summaryTable(trace: ConnectorTrace): string {
 function buildHtml(trace: ConnectorTrace): string {
   const model = trace.turns[0]?.model ?? "claude-sonnet-4-6";
   const n = trace.turns.length;
-  const ns = trace.subagentTurns.length;
   const dur = fmtDuration(trace.totalDurationMs);
   const mainCost = trace.turns.reduce((s, t) => s + t.costUsd, 0);
   const meta = `${n} call${n !== 1 ? "s" : ""} · ${esc(model)} · $${mainCost.toFixed(4)} · ${dur}`;
   const cards = trace.turns.map((t, i) => callCard(t, mainCost, trace.prompt, i === 0 ? trace.availableTools : [])).join("");
   const ts = new Date(trace.startedAt).toLocaleString();
 
-  let subSection = "";
-  if (ns > 0) {
-    const subModel = trace.subagentTurns[0]?.model ?? "claude-sonnet-4-6";
-    const subCost = trace.subagentTurns.reduce((s, t) => s + t.costUsd, 0);
+  const subSection = trace.subagentGroups.map((g, i) => {
+    const ns = g.turns.length;
+    const subModel = g.turns[0]?.model ?? "claude-sonnet-4-6";
+    const subCost = g.turns.reduce((s, t) => s + t.costUsd, 0);
+    const label = trace.subagentGroups.length > 1
+      ? `Subagent ${i + 1}: ticket-batch-analyzer`
+      : "Subagent: ticket-batch-analyzer";
     const subMeta = `${ns} call${ns !== 1 ? "s" : ""} · ${esc(subModel)} · $${subCost.toFixed(4)}`;
-    const subCards = trace.subagentTurns.map((t, i) => callCard(t, subCost, "", i === 0 ? trace.subagentAvailableTools : [])).join("");
-    subSection = `<div class="context-section" id="subagent">
-      <h3>Subagent: ticket-batch-analyzer</h3>
+    const subCards = g.turns.map((t, j) => callCard(t, subCost, "", j === 0 ? g.tools : [])).join("");
+    return `<div class="context-section" id="subagent-${i}">
+      <h3>${esc(label)}</h3>
       <div class="context-meta">${subMeta}</div>
-      ${costBreakdown(trace.subagentTurns)}
+      ${costBreakdown(g.turns)}
       ${subCards}
     </div>`;
-  }
+  }).join("");
 
   return `<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8">
