@@ -6,7 +6,7 @@
  *   npx tsx generate_connector_skills.ts                          # all connectors
  *   npx tsx generate_connector_skills.ts --connector hubspot      # one connector
  *   npx tsx generate_connector_skills.ts --months 3               # last 3 months
- *   npx tsx generate_connector_skills.ts --no-preset              # minimal system prompt (default: claude_code preset)
+ *   npx tsx generate_connector_skills.ts --preset                 # claude_code system prompt (default: minimal)
  */
 
 import { query, type SDKMessage, type SDKAssistantMessage, type SDKResultMessage, type AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
@@ -305,7 +305,7 @@ async function main(): Promise<void> {
   const monthsFlag = args.indexOf("--months");
   const months = monthsFlag !== -1 ? parseInt(args[monthsFlag + 1], 10) : 6;
 
-  const usePreset = !args.includes("--no-preset");
+  const usePreset = args.includes("--preset");
 
   console.log(`Generating skills for: ${connectors.join(", ")} (last ${months} month(s))`);
   console.log(`System prompt: ${usePreset ? "claude_code preset" : "minimal (default)"}`);
