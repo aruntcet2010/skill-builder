@@ -34,11 +34,11 @@ const ALL_CONNECTORS = [
 // ---------------------------------------------------------------------------
 const TICKET_BATCH_ANALYZER: AgentDefinition = {
   description:
-    "Analyzes a batch of raw Zendesk support tickets and extracts distinct issues as a JSON array. " +
-    "Use this agent for each batch of 50 tickets that needs to be processed in parallel.",
-  prompt: `You are a support ticket analyst. You will receive a batch of raw Zendesk tickets as JSON.
+    "Reads a batch of Zendesk support ticket markdown files and extracts distinct issues as a JSON array. " +
+    "Use this agent for each batch of ticket file paths that needs to be processed in parallel.",
+  prompt: `You are a support ticket analyst. You will receive a list of ticket file paths.
 
-Your job: extract every distinct issue present across these tickets.
+Read each file using the Read tool, then extract every distinct issue present across all the tickets.
 
 For each distinct issue return a JSON object with these fields:
 - title: concise issue title (max 15 words)
@@ -48,15 +48,15 @@ For each distinct issue return a JSON object with these fields:
 - root_cause: technical root cause (2-3 sentences)
 - resolution: how to fix or work around it (2-3 sentences)
 - customer_impact: business impact on the customer (1-2 sentences)
-- ticket_ids: string array of ticket IDs in this batch that relate to this issue
+- ticket_ids: string array of ticket IDs from the files that relate to this issue
 
 Rules:
+- Read ALL files before extracting issues
 - Group tickets that share the same underlying root cause into one issue
 - One ticket can only belong to one issue (pick the best match)
 - Return ONLY a valid JSON array — no markdown, no explanation, no code fences
 - If a ticket has no useful signal (e.g. spam, test ticket), skip it`,
-  // No tools needed — subagent works only with the inline ticket data in its prompt
-  tools: [],
+  tools: ["Read"],
   model: "claude-sonnet-4-6",
 };
 
@@ -71,19 +71,21 @@ Work through these steps in order:
 
 ## Step 1 — Fetch tickets
 \`\`\`
-npx tsx ${REPO_ROOT}/scripts/fetch_raw_tickets.ts --connector ${connector} --months 6 --output /tmp/${connector}_raw_tickets.json
+npx tsx ${REPO_ROOT}/scripts/fetch_raw_tickets.ts --connector ${connector} --months 6 --output /tmp/${connector}_tickets
 \`\`\`
+This writes one markdown file per ticket + metadata.md into /tmp/${connector}_tickets/.
 
-## Step 2 — Read the ticket file
-Read /tmp/${connector}_raw_tickets.json and check how many tickets there are.
+## Step 2 — Read the metadata index
+Read /tmp/${connector}_tickets/metadata.md to get the full list of ticket filenames and total count.
 If 0 tickets, write a minimal SKILL.md saying no tickets found and stop.
 
 ## Step 3 — Spawn parallel batch subagents
-Divide the tickets into batches of 50. Invoke the "ticket-batch-analyzer" subagent for EVERY batch IN PARALLEL in a single response — do not wait for one to finish before starting the next.
+Divide the ticket filenames into batches of 50. Invoke the "ticket-batch-analyzer" subagent for EVERY batch IN PARALLEL in a single response — do not wait for one to finish before starting the next.
 
-For each batch subagent call, pass the ticket objects as the prompt:
-"Analyze these tickets and return issues as JSON:\n<paste the 50 ticket objects as JSON>"
+For each batch subagent call, pass the list of full file paths as the prompt:
+"Read and analyze these ticket files, return issues as JSON:\n/tmp/${connector}_tickets/ticket_X.md\n/tmp/${connector}_tickets/ticket_Y.md\n..."
 
+The subagent will read each file and return a JSON array of issues.
 Collect the JSON array returned by each subagent.
 
 ## Step 4 — Consolidate
