@@ -11,9 +11,11 @@ import { query, type SDKMessage, type SDKAssistantMessage, type SDKResultMessage
 import path from "path";
 import { fileURLToPath } from "url";
 
+import fs from "fs/promises";
+
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
 const HEVO_AGENT_REPO = path.resolve(REPO_ROOT, "../hevo-connector-agent");
-const SKILLS_OUTPUT_DIR = path.join(HEVO_AGENT_REPO, ".claude/skills");
+const SKILL_DIR = path.join(HEVO_AGENT_REPO, ".claude/skills/connector-oncall");
 
 // Process smallest connectors first for faster feedback
 const ALL_CONNECTORS = [
@@ -61,11 +63,12 @@ Rules:
 };
 
 // ---------------------------------------------------------------------------
-// Main agent prompt
+// Main agent prompt — only generates {connector}/ files, not SKILL.md
 // ---------------------------------------------------------------------------
 function buildPrompt(connector: string): string {
+  const connectorDir = `${SKILL_DIR}/${connector}`;
   return `
-You are generating a Claude Code skill for the "${connector}" connector from historical Zendesk support tickets.
+You are generating oncall issue files for the "${connector}" connector from historical Zendesk support tickets.
 
 Work through these steps in order:
 
@@ -77,86 +80,74 @@ This writes one markdown file per ticket + metadata.md into /tmp/${connector}_ti
 
 ## Step 2 — Read the metadata index
 Read /tmp/${connector}_tickets/metadata.md to get the full list of ticket filenames and total count.
-If 0 tickets, write a minimal SKILL.md saying no tickets found and stop.
+If 0 tickets, write ${connectorDir}/selection.md with a single line: "No tickets found in the last 6 months." and stop.
 
 ## Step 3 — Spawn parallel batch subagents
 Divide the ticket filenames into batches of 50. Invoke the "ticket-batch-analyzer" subagent for EVERY batch IN PARALLEL in a single response — do not wait for one to finish before starting the next.
 
 For each batch subagent call, pass the list of full file paths as the prompt:
-"Read and analyze these ticket files, return issues as JSON:\n/tmp/${connector}_tickets/ticket_X.md\n/tmp/${connector}_tickets/ticket_Y.md\n..."
+"Read and analyze these ticket files, return issues as JSON:
+/tmp/${connector}_tickets/ticket_X.md
+/tmp/${connector}_tickets/ticket_Y.md
+..."
 
-The subagent will read each file and return a JSON array of issues.
-Collect the JSON array returned by each subagent.
+Each subagent reads the files and returns a JSON array of issues. Collect all results.
 
 ## Step 4 — Consolidate
 Merge all subagent results into one master issue list:
 - Issues with the same root cause → merge (combine ticket_ids, keep highest severity)
 - Sort by number of ticket_ids descending (most frequent first)
+- Number them sequentially: issue1, issue2, issue3...
 
-## Step 5 — Categorize into 6–10 groups
-Group issues into 6–10 categories an oncall engineer would recognise.
-Use lowercase-hyphenated slugs (e.g. "connection-auth", "replication-cdc", "data-types", "schema-mapping").
+## Step 5 — Write one file per issue
+For each issue N, write: \`${connectorDir}/issue{N}.md\`
 
-## Step 6 — Write skill files
-Output base: \`${SKILLS_OUTPUT_DIR}/${connector}-oncall/\`
-
-### SKILL.md
 \`\`\`
----
-name: ${connector}-oncall
-description: Historical oncall patterns for the ${connector} connector (last 6 months). Use when debugging ${connector} pipeline issues, investigating customer-reported errors, or looking up past resolutions. Covers N distinct issues from M tickets.
----
+# Issue {N}: {title}
 
-# ${connector.charAt(0).toUpperCase() + connector.slice(1)} Connector — Oncall Patterns
-
-**M tickets → N distinct issues** (last 6 months)
-
-## Issue Categories
-
-| Category | Description | Guide | Issues |
-|----------|-------------|-------|--------|
-| **{Name}** | {one-liner} | [patterns/{slug}/selection.md](patterns/{slug}/selection.md) | {count} |
-
-## How to Use
-1. Find the category matching the symptom
-2. Read selection.md — maps symptoms/errors to issue numbers
-3. Read issues.md — root cause, resolution, customer impact
-\`\`\`
-
-### patterns/{slug}/selection.md
-\`\`\`
-# {Category Name} — Selection Guide
-
-## Symptom → Issue Mapping
-→ **"{error keyword}"** → Issue {N}: {title}
-
-## All Issues (most frequent first)
-| # | Title | Severity | Tickets |
-|---|-------|----------|---------|
-| {N} | {title} | {severity} | {count} |
-
-→ Full details: [issues.md](issues.md)
-\`\`\`
-
-### patterns/{slug}/issues.md
-\`\`\`
-# {Category Name} — Full Issue Details
-
-## Issue {N}: {title}
 **Severity:** {X} | **Tickets:** {Y} | **Components:** {A, B}
 
-**Description:** ...
-**Root Cause:** ...
-**Resolution:** ...
-**Customer Impact:** ...
+## Description
+{what the customer experiences}
 
----
+## Root Cause
+{technical root cause}
+
+## Resolution
+{how to fix or work around it}
+
+## Customer Impact
+{business impact}
+
+## Related Tickets
+{comma-separated ticket IDs}
+\`\`\`
+
+## Step 6 — Write selection.md
+Write: \`${connectorDir}/selection.md\`
+
+\`\`\`
+# ${connector.charAt(0).toUpperCase() + connector.slice(1)} — Issue Index
+
+**{M} tickets → {N} distinct issues** (last 6 months)
+
+## Symptom → Issue Mapping
+
+→ **"{error keyword or message}"** → [Issue {N}: {title}](issue{N}.md)
+→ **"{component or behaviour}"** → [Issue {N}: {title}](issue{N}.md)
+...one line per common symptom, using actual keywords from the tickets...
+
+## All Issues (most frequent first)
+
+| # | Title | Severity | Tickets | File |
+|---|-------|----------|---------|------|
+| {N} | {title} | {severity} | {count} | [issue{N}.md](issue{N}.md) |
 \`\`\`
 
 Rules:
-- Issue numbers in selection.md must match ## Issue N: headers in issues.md
-- Use actual error keywords from ticket descriptions in the Symptom → Issue Mapping
-- Write each file completely before moving to the next
+- Write all issue files before writing selection.md
+- Symptom → Issue Mapping must use actual error messages and keywords from the ticket content
+- Every issue listed in selection.md must have a corresponding issue{N}.md file
 
 Start now with Step 1.
 `.trim();
@@ -205,6 +196,42 @@ async function runConnector(connector: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// Write top-level SKILL.md after all connectors are done
+// ---------------------------------------------------------------------------
+async function writeSkillMd(connectors: string[]): Promise<void> {
+  await fs.mkdir(SKILL_DIR, { recursive: true });
+
+  const rows = connectors
+    .map((c) => `| ${c.charAt(0).toUpperCase() + c.slice(1)} | [${c}/selection.md](${c}/selection.md) |`)
+    .join("\n");
+
+  const content = `---
+name: connector-oncall
+description: Historical oncall patterns from Zendesk support tickets (last 6 months) for all connectors. Use when debugging any connector pipeline issue, investigating customer-reported errors, or looking up past resolutions and root causes.
+---
+
+# Connector Oncall Patterns
+
+Historical issue patterns extracted from Zendesk support tickets (last 6 months).
+
+## Connectors
+
+| Connector | Issue Index |
+|-----------|-------------|
+${rows}
+
+## How to Use
+
+1. Find your connector in the table above
+2. Read \`{connector}/selection.md\` — maps symptoms and error keywords to specific issues
+3. Read the linked \`issue{N}.md\` — full root cause, resolution, and customer impact
+`;
+
+  await fs.writeFile(path.join(SKILL_DIR, "SKILL.md"), content, "utf8");
+  console.log(`Written SKILL.md → ${SKILL_DIR}/SKILL.md`);
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 async function main(): Promise<void> {
@@ -216,7 +243,9 @@ async function main(): Promise<void> {
       : ALL_CONNECTORS;
 
   console.log(`Generating skills for: ${connectors.join(", ")}`);
-  console.log(`Output: ${SKILLS_OUTPUT_DIR}/`);
+  console.log(`Output: ${SKILL_DIR}/`);
+
+  const completed: string[] = [];
 
   for (const connector of connectors) {
     if (!ALL_CONNECTORS.includes(connector)) {
@@ -224,8 +253,10 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     await runConnector(connector);
+    completed.push(connector);
   }
 
+  await writeSkillMd(completed);
   console.log("\nAll done.");
 }
 
