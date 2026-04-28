@@ -67,6 +67,7 @@ export interface ConnectorTrace {
   startedAt: string;
   prompt: string;
   availableTools: ToolDef[];
+  subagentAvailableTools: ToolDef[];
   turns: Turn[];
   subagentTurns: Turn[];
   totalCostUsd: number;
@@ -140,7 +141,8 @@ function buildMessages(req: Record<string, unknown>): ApiMessage[] {
 export class RunTracer {
   private turns: Turn[] = [];
   private subagentTurns: Turn[] = [];
-  private realTools: ToolDef[] = [];   // actual tool defs extracted from request bodies
+  private realTools: ToolDef[] = [];
+  private subagentRealTools: ToolDef[] = [];
   private startMs = Date.now();
 
   constructor(
@@ -291,6 +293,9 @@ export class RunTracer {
     let subSeq = 0;
     let subSystemPrompt = "";
     for (const { req, res } of subPairs) {
+      if (!this.subagentRealTools.length) {
+        this.subagentRealTools = extractToolDefs(req, []);
+      }
       subSeq++;
       const u = (res as any).usage ?? {};
       const inTokens: number = u.input_tokens ?? 0;
@@ -336,6 +341,7 @@ export class RunTracer {
       startedAt: new Date(this.startMs).toISOString(),
       prompt: this.prompt,
       availableTools: this.realTools.length ? this.realTools : this.availableTools,
+      subagentAvailableTools: this.subagentRealTools,
       turns: this.turns,
       subagentTurns: this.subagentTurns,
       totalCostUsd: totalCostUsd ?? this.turns.reduce((s, t) => s + t.costUsd, 0),
@@ -637,7 +643,7 @@ function buildHtml(trace: ConnectorTrace): string {
     const subModel = trace.subagentTurns[0]?.model ?? "claude-sonnet-4-6";
     const subCost = trace.subagentTurns.reduce((s, t) => s + t.costUsd, 0);
     const subMeta = `${ns} call${ns !== 1 ? "s" : ""} · ${esc(subModel)} · $${subCost.toFixed(4)}`;
-    const subCards = trace.subagentTurns.map((t) => callCard(t, subCost, "")).join("");
+    const subCards = trace.subagentTurns.map((t, i) => callCard(t, subCost, "", i === 0 ? trace.subagentAvailableTools : [])).join("");
     subSection = `<div class="context-section" id="subagent">
       <h3>Subagent: ticket-batch-analyzer</h3>
       <div class="context-meta">${subMeta}</div>
