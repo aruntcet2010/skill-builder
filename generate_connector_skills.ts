@@ -65,7 +65,7 @@ Rules:
 // ---------------------------------------------------------------------------
 // Main agent prompt — only generates {connector}/ files, not SKILL.md
 // ---------------------------------------------------------------------------
-function buildPrompt(connector: string): string {
+function buildPrompt(connector: string, months: number): string {
   const connectorDir = `${SKILL_DIR}/${connector}`;
   return `
 You are generating oncall issue files for the "${connector}" connector from historical Zendesk support tickets.
@@ -74,7 +74,7 @@ Work through these steps in order:
 
 ## Step 1 — Fetch tickets
 \`\`\`
-npx tsx ${REPO_ROOT}/scripts/fetch_raw_tickets.ts --connector ${connector} --months 6 --output /tmp/${connector}_tickets
+npx tsx ${REPO_ROOT}/scripts/fetch_raw_tickets.ts --connector ${connector} --months ${months} --output /tmp/${connector}_tickets
 \`\`\`
 This writes one markdown file per ticket + metadata.md into /tmp/${connector}_tickets/.
 
@@ -156,15 +156,15 @@ Start now with Step 1.
 // ---------------------------------------------------------------------------
 // Stream helper
 // ---------------------------------------------------------------------------
-async function runConnector(connector: string): Promise<void> {
+async function runConnector(connector: string, months: number): Promise<void> {
   console.log(`\n${"=".repeat(60)}`);
-  console.log(`Generating skill for: ${connector}`);
+  console.log(`Generating skill for: ${connector} (last ${months} month(s))`);
   console.log("=".repeat(60));
 
   let totalCost = 0;
 
   for await (const message of query({
-    prompt: buildPrompt(connector),
+    prompt: buildPrompt(connector, months),
     options: {
       model: "claude-sonnet-4-6",
       settingSources: ["user"],
@@ -236,13 +236,14 @@ ${rows}
 // ---------------------------------------------------------------------------
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
-  const connectorFlag = args.indexOf("--connector");
-  const connectors =
-    connectorFlag !== -1
-      ? [args[connectorFlag + 1]]
-      : ALL_CONNECTORS;
 
-  console.log(`Generating skills for: ${connectors.join(", ")}`);
+  const connectorFlag = args.indexOf("--connector");
+  const connectors = connectorFlag !== -1 ? [args[connectorFlag + 1]] : ALL_CONNECTORS;
+
+  const monthsFlag = args.indexOf("--months");
+  const months = monthsFlag !== -1 ? parseInt(args[monthsFlag + 1], 10) : 6;
+
+  console.log(`Generating skills for: ${connectors.join(", ")} (last ${months} month(s))`);
   console.log(`Output: ${SKILL_DIR}/`);
 
   const completed: string[] = [];
@@ -252,7 +253,7 @@ async function main(): Promise<void> {
       console.error(`Unknown connector: ${connector}. Valid: ${ALL_CONNECTORS.join(", ")}`);
       process.exit(1);
     }
-    await runConnector(connector);
+    await runConnector(connector, months);
     completed.push(connector);
   }
 
