@@ -12,7 +12,7 @@ import {
   toolPills, toolBlock, availableToolsSection, callCard, messagesSection,
   renderContent, extractFirstUserText, extractSystemPrompt, extractToolDefs, buildMessages,
   type ToolUse, type ToolDef, type Turn, type ApiMessage,
-} from "./tracer_shared.js";
+} from "../tracer_shared.js";
 
 export type { ToolDef, ApiMessage };
 
