@@ -12,8 +12,9 @@ import path from "path";
 import { config as loadEnv } from "dotenv";
 import { fileURLToPath } from "url";
 
-loadEnv({ path: path.join(path.dirname(fileURLToPath(import.meta.url)), "../.env") });
-snowflake.configure({ logLevel: "ERROR" } as any);
+const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
+loadEnv({ path: path.join(SCRIPTS_DIR, "../.env") });
+snowflake.configure({ logLevel: "ERROR", logFilePath: path.join(SCRIPTS_DIR, "../logs/snowflake.log") } as any);
 
 // ---------------------------------------------------------------------------
 // Connector map
