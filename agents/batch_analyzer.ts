@@ -1,5 +1,9 @@
 import { query, type SDKMessage, type SDKAssistantMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { OrchestratorTracer } from "../tracer_v2.js";
+import type { ToolDef } from "../tracer_shared.js";
 import type { SymptomSummary } from "./types.js";
+
+const TOOLS: ToolDef[] = [{ name: "Read", type: "builtin", description: "Read file contents" }];
 
 function buildPrompt(ticketPaths: string[]): string {
   return `You are a support ticket analyst.
@@ -26,11 +30,14 @@ Rules:
 export async function runBatchAnalyzer(
   ticketPaths: string[],
   env: Record<string, string>,
+  tracer?: OrchestratorTracer,
+  runName = "batch_analyzer",
 ): Promise<SymptomSummary[]> {
+  const prompt = buildPrompt(ticketPaths);
   let output = "";
 
-  for await (const message of query({
-    prompt: buildPrompt(ticketPaths),
+  const rawStream = query({
+    prompt,
     options: {
       model: "claude-sonnet-4-6",
       allowedTools: ["Read"],
@@ -39,7 +46,11 @@ export async function runBatchAnalyzer(
       maxTurns: 20,
       env,
     },
-  })) {
+  });
+
+  const stream = tracer ? tracer.capture(runName, "batch_analyzer", prompt, TOOLS, rawStream) : rawStream;
+
+  for await (const message of stream) {
     const msg = message as SDKMessage;
     if (msg.type === "assistant") {
       for (const block of (msg as SDKAssistantMessage).message.content) {

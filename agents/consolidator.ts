@@ -1,6 +1,13 @@
 import { query, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import fs from "fs/promises";
+import type { OrchestratorTracer } from "../tracer_v2.js";
+import type { ToolDef } from "../tracer_shared.js";
 import type { Symptom } from "./types.js";
+
+const TOOLS: ToolDef[] = [
+  { name: "Read",  type: "builtin", description: "Read file contents" },
+  { name: "Write", type: "builtin", description: "Write file contents" },
+];
 
 function buildPrompt(connector: string, batchFilePaths: string[], outputPath: string): string {
   return `You are a support ticket analyst consolidating symptom data for the "${connector}" connector.
@@ -35,9 +42,12 @@ export async function runConsolidator(
   batchFilePaths: string[],
   outputPath: string,
   env: Record<string, string>,
+  tracer?: OrchestratorTracer,
 ): Promise<Symptom[]> {
-  for await (const message of query({
-    prompt: buildPrompt(connector, batchFilePaths, outputPath),
+  const prompt = buildPrompt(connector, batchFilePaths, outputPath);
+
+  const rawStream = query({
+    prompt,
     options: {
       model: "claude-sonnet-4-6",
       allowedTools: ["Read", "Write"],
@@ -46,7 +56,11 @@ export async function runConsolidator(
       maxTurns: 30,
       env,
     },
-  })) {
+  });
+
+  const stream = tracer ? tracer.capture("consolidator", "consolidator", prompt, TOOLS, rawStream) : rawStream;
+
+  for await (const message of stream) {
     const msg = message as SDKMessage;
     if (msg.type === "result" && (msg as SDKResultMessage).is_error) {
       throw new Error(`consolidator failed for ${connector}`);

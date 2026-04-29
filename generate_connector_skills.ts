@@ -17,6 +17,7 @@ import { runBatchAnalyzer } from "./agents/batch_analyzer.js";
 import { runConsolidator } from "./agents/consolidator.js";
 import { runIssueWriter } from "./agents/issue_writer.js";
 import type { Symptom } from "./agents/types.js";
+import { OrchestratorTracer } from "./tracer_v2.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
 const RUN_ID = randomUUID();
@@ -83,11 +84,11 @@ async function readAndBatch(connector: string, batchSize = 5): Promise<string[][
 // ---------------------------------------------------------------------------
 // Step 3: run batch analyzers in parallel, write batch JSON files
 // ---------------------------------------------------------------------------
-async function analyzeBatches(connector: string, batches: string[][]): Promise<string[]> {
+async function analyzeBatches(connector: string, batches: string[][], tracer: OrchestratorTracer): Promise<string[]> {
   console.log(`  [${connector}] running ${batches.length} batch analyzers in parallel...`);
   const batchFilePaths = await Promise.all(
     batches.map(async (batch, i) => {
-      const symptoms = await runBatchAnalyzer(batch, otelEnv);
+      const symptoms = await runBatchAnalyzer(batch, otelEnv, tracer, `batch_analyzer[${i}]`);
       const filePath = `/tmp/${connector}_batch_${i}.json`;
       await fs.writeFile(filePath, JSON.stringify(symptoms, null, 2), "utf8");
       console.log(`  [${connector}] batch ${i} done — ${symptoms.length} symptoms`);
@@ -100,10 +101,10 @@ async function analyzeBatches(connector: string, batches: string[][]): Promise<s
 // ---------------------------------------------------------------------------
 // Step 4: consolidate — deduplicate, rank, assign slugs
 // ---------------------------------------------------------------------------
-async function consolidate(connector: string, batchFilePaths: string[]): Promise<Symptom[]> {
+async function consolidate(connector: string, batchFilePaths: string[], tracer: OrchestratorTracer): Promise<Symptom[]> {
   console.log(`  [${connector}] consolidating ${batchFilePaths.length} batch files...`);
   const outputPath = `/tmp/${connector}_symptoms.json`;
-  const symptoms = await runConsolidator(connector, batchFilePaths, outputPath, otelEnv);
+  const symptoms = await runConsolidator(connector, batchFilePaths, outputPath, otelEnv, tracer);
   console.log(`  [${connector}] consolidated → ${symptoms.length} distinct symptoms`);
   return symptoms;
 }
@@ -111,7 +112,7 @@ async function consolidate(connector: string, batchFilePaths: string[]): Promise
 // ---------------------------------------------------------------------------
 // Step 5: write issue files in parallel — one agent per symptom
 // ---------------------------------------------------------------------------
-async function writeIssueFiles(connector: string, symptoms: Symptom[]): Promise<void> {
+async function writeIssueFiles(connector: string, symptoms: Symptom[], tracer: OrchestratorTracer): Promise<void> {
   const connectorDir = path.join(SKILL_DIR, connector);
   await fs.mkdir(connectorDir, { recursive: true });
 
@@ -122,7 +123,7 @@ async function writeIssueFiles(connector: string, symptoms: Symptom[]): Promise<
         id => `/tmp/${connector}_tickets/ticket_${id}.md`
       );
       const outputPath = path.join(connectorDir, `${symptom.slug}.md`);
-      await runIssueWriter(symptom, ticketPaths, outputPath, otelEnv);
+      await runIssueWriter(symptom, ticketPaths, outputPath, otelEnv, tracer);
       console.log(`  [${connector}] wrote ${symptom.slug}.md`);
     })
   );
@@ -211,6 +212,7 @@ async function runConnector(connector: string, months: number): Promise<void> {
   console.log("=".repeat(60));
 
   const connectorDir = path.join(SKILL_DIR, connector);
+  const tracer = new OrchestratorTracer(connector, months, RUN_ID);
 
   // Step 1
   await fetchTickets(connector, months);
@@ -228,17 +230,21 @@ async function runConnector(connector: string, months: number): Promise<void> {
   }
 
   // Step 3
-  const batchFilePaths = await analyzeBatches(connector, batches);
+  const batchFilePaths = await analyzeBatches(connector, batches, tracer);
 
   // Step 4
-  const symptoms = await consolidate(connector, batchFilePaths);
+  const symptoms = await consolidate(connector, batchFilePaths, tracer);
 
   // Step 5
-  await writeIssueFiles(connector, symptoms);
+  await writeIssueFiles(connector, symptoms, tracer);
 
   // Step 6
   const totalTickets = batches.flat().length;
   await writeSelectionMd(connector, symptoms, totalTickets, months);
+
+  // Write trace
+  const htmlPath = await tracer.writeReport(connectorDir);
+  console.log(`  [${connector}] trace → ${htmlPath}`);
 }
 
 // ---------------------------------------------------------------------------

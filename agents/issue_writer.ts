@@ -1,5 +1,12 @@
 import { query, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { OrchestratorTracer } from "../tracer_v2.js";
+import type { ToolDef } from "../tracer_shared.js";
 import type { Symptom } from "./types.js";
+
+const TOOLS: ToolDef[] = [
+  { name: "Read",  type: "builtin", description: "Read file contents" },
+  { name: "Write", type: "builtin", description: "Write file contents" },
+];
 
 function buildPrompt(symptom: Symptom, ticketPaths: string[], outputPath: string): string {
   return `You are a support ticket analyst writing a detailed oncall issue file.
@@ -45,9 +52,12 @@ export async function runIssueWriter(
   ticketPaths: string[],
   outputPath: string,
   env: Record<string, string>,
+  tracer?: OrchestratorTracer,
 ): Promise<void> {
-  for await (const message of query({
-    prompt: buildPrompt(symptom, ticketPaths, outputPath),
+  const prompt = buildPrompt(symptom, ticketPaths, outputPath);
+
+  const rawStream = query({
+    prompt,
     options: {
       model: "claude-sonnet-4-6",
       allowedTools: ["Read", "Write"],
@@ -56,7 +66,13 @@ export async function runIssueWriter(
       maxTurns: 40,
       env,
     },
-  })) {
+  });
+
+  const stream = tracer
+    ? tracer.capture(`issue_writer[${symptom.slug}]`, "issue_writer", prompt, TOOLS, rawStream)
+    : rawStream;
+
+  for await (const message of stream) {
     const msg = message as SDKMessage;
     if (msg.type === "result" && (msg as SDKResultMessage).is_error) {
       throw new Error(`issue_writer failed for ${symptom.slug}`);
