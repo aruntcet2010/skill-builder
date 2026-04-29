@@ -1,5 +1,6 @@
 /**
  * In-process trace capture for the Claude Agent SDK + cost-ledger-style HTML report.
+ * Works with any harness skill — pass any runLabel string.
  * Wraps query() and records each assistant turn from the SDK message stream.
  */
 
@@ -19,13 +20,13 @@ export type { ToolDef, ApiMessage };
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface SubagentGroup {
+  label: string;
   turns: Turn[];
   tools: ToolDef[];
 }
 
-export interface ConnectorTrace {
-  connector: string;
-  months: number;
+export interface HarnessTrace {
+  runLabel: string;
   runId: string;
   startedAt: string;
   prompt: string;
@@ -36,9 +37,6 @@ export interface ConnectorTrace {
   totalDurationMs: number;
 }
 
-// ── Body-file helpers ─────────────────────────────────────────────────────────
-// (renderContent, extractFirstUserText, extractSystemPrompt, extractToolDefs, buildMessages imported from tracer_shared)
-
 // ── Tracer ────────────────────────────────────────────────────────────────────
 
 export class RunTracer {
@@ -48,8 +46,7 @@ export class RunTracer {
   private startMs = Date.now();
 
   constructor(
-    private readonly connector: string,
-    private readonly months: number,
+    private readonly runLabel: string,
     private readonly runId: string,
     private readonly prompt: string,
     private readonly availableTools: ToolDef[] = [],
@@ -60,7 +57,6 @@ export class RunTracer {
     for await (const msg of source) {
       if (msg.type === "assistant") {
         const a = msg as SDKAssistantMessage;
-        // Skip forwarded subagent messages — they appear in the subagent section instead
         if (a.parent_tool_use_id !== null) { yield msg; continue; }
         const m = a.message;
         const usage = (m.usage ?? {}) as Record<string, number>;
@@ -79,8 +75,7 @@ export class RunTracer {
           }
         }
 
-        // One LLM API call can emit multiple SDKAssistantMessages (one per tool invocation).
-        // They all carry the same token usage. Merge them into one Turn instead of counting each separately.
+        // One LLM API call can emit multiple SDKAssistantMessages — merge by token fingerprint
         const prev = this.turns[this.turns.length - 1];
         const sameCall = prev &&
           prev.inputTokens === inputTokens &&
@@ -112,8 +107,6 @@ export class RunTracer {
     }
   }
 
-  // Enrich turns with system prompt + message history from OTEL_LOG_RAW_API_BODIES=file: output.
-  // Also captures subagent turns from body files not matched to the main-agent stream.
   async loadBodies(): Promise<void> {
     const bodiesDir = `/tmp/otel_bodies_${this.runId}`;
     let files: string[];
@@ -146,7 +139,6 @@ export class RunTracer {
     }
     if (!pairs.length) return;
 
-    // Build a fingerprint → turn lookup from the tracer's captured turns.
     const turnByFp = new Map<string, Turn>();
     for (const t of this.turns) {
       const fp = `${t.inputTokens}:${t.cacheReadTokens}:${t.cacheCreationTokens}`;
@@ -191,11 +183,20 @@ export class RunTracer {
       groupMap.get(firstUser)!.push(pair);
     }
 
-    for (const pairs of groupMap.values()) {
+    let groupIndex = 0;
+    for (const [firstUser, pairs] of groupMap.entries()) {
+      groupIndex++;
       const tools = extractToolDefs(pairs[0].req, []);
       const turns: Turn[] = [];
       let seq = 0;
       let systemPrompt = "";
+
+      // Derive a label from the subagent's system prompt (first non-empty line), falling
+      // back to the first 60 chars of its initial user message.
+      const sysPrompt = extractSystemPrompt(pairs[0].req);
+      const labelFromSys = sysPrompt.split("\n").find(l => l.trim().length > 10)?.trim().slice(0, 60);
+      const labelFromMsg = firstUser.trim().slice(0, 60);
+      const label = labelFromSys ?? labelFromMsg ?? `Subagent ${groupIndex}`;
 
       for (const { req, res } of pairs) {
         seq++;
@@ -233,14 +234,13 @@ export class RunTracer {
           messages: buildMessages(req),
         });
       }
-      this.subagentGroups.push({ turns, tools });
+      this.subagentGroups.push({ label, turns, tools });
     }
   }
 
   async writeReport(outputDir: string, totalCostUsd?: number, totalDurationMs?: number): Promise<string> {
-    const trace: ConnectorTrace = {
-      connector: this.connector,
-      months: this.months,
+    const trace: HarnessTrace = {
+      runLabel: this.runLabel,
       runId: this.runId,
       startedAt: new Date(this.startMs).toISOString(),
       prompt: this.prompt,
@@ -257,10 +257,9 @@ export class RunTracer {
   }
 }
 
-// ── v1-specific HTML helpers ──────────────────────────────────────────────────
-// (messagesSection, callCard imported from tracer_shared)
+// ── HTML ──────────────────────────────────────────────────────────────────────
 
-function summaryTable(trace: ConnectorTrace): string {
+function summaryTable(trace: HarnessTrace): string {
   const n = trace.turns.length;
   const dur = fmtDuration(trace.totalDurationMs);
   const mainCost = trace.turns.reduce((s, t) => s + t.costUsd, 0);
@@ -269,25 +268,29 @@ function summaryTable(trace: ConnectorTrace): string {
   const subRows = trace.subagentGroups.map((g, i) => {
     const ns = g.turns.length;
     const cost = g.turns.reduce((s, t) => s + t.costUsd, 0);
-    const label = trace.subagentGroups.length > 1 ? `Subagent ${i + 1}` : "Subagent";
     return `<tr data-anchor="subagent-${i}">
-      <td>${label}</td><td>${ns}</td>
+      <td style="padding-left:24px">${esc(g.label)}</td><td>${ns}</td>
       <td>$${cost.toFixed(4)}</td>
       <td>${costBar(cost, total)}</td>
     </tr>`;
   }).join("");
+
+  const subHeader = trace.subagentGroups.length
+    ? `<tr class="group-header"><td colspan="4">Subagents</td></tr>`
+    : "";
 
   const totalCalls = n + trace.subagentGroups.reduce((s, g) => s + g.turns.length, 0);
 
   return `<table class="summary-table">
   <thead><tr><th>Context</th><th>LLM Calls</th><th>Cost</th><th>Share</th></tr></thead>
   <tbody>
+    <tr class="group-header"><td colspan="4">Main Agent</td></tr>
     <tr data-anchor="main-agent">
-      <td>Main Agent</td><td>${n}</td>
+      <td style="padding-left:24px">${esc(trace.runLabel)}</td><td>${n}</td>
       <td>$${mainCost.toFixed(4)}</td>
       <td>${costBar(mainCost, total)}</td>
     </tr>
-    ${subRows}
+    ${subHeader}${subRows}
     <tr class="total">
       <td>Total &nbsp;<span style="font-weight:400;font-size:11px;color:var(--text-dim)">${dur}</span></td>
       <td>${totalCalls}</td><td>$${total.toFixed(4)}</td><td></td>
@@ -296,7 +299,7 @@ function summaryTable(trace: ConnectorTrace): string {
 </table>`;
 }
 
-function buildHtml(trace: ConnectorTrace): string {
+function buildHtml(trace: HarnessTrace): string {
   const model = trace.turns[0]?.model ?? "claude-sonnet-4-6";
   const n = trace.turns.length;
   const dur = fmtDuration(trace.totalDurationMs);
@@ -309,13 +312,10 @@ function buildHtml(trace: ConnectorTrace): string {
     const ns = g.turns.length;
     const subModel = g.turns[0]?.model ?? "claude-sonnet-4-6";
     const subCost = g.turns.reduce((s, t) => s + t.costUsd, 0);
-    const label = trace.subagentGroups.length > 1
-      ? `Subagent ${i + 1}: ticket-batch-analyzer`
-      : "Subagent: ticket-batch-analyzer";
     const subMeta = `${ns} call${ns !== 1 ? "s" : ""} · ${esc(subModel)} · $${subCost.toFixed(4)}`;
     const subCards = g.turns.map((t, j) => callCard(t, subCost, "", j === 0 ? g.tools : [])).join("");
     return `<div class="context-section" id="subagent-${i}">
-      <h3>${esc(label)}</h3>
+      <h3>${esc(g.label)}</h3>
       <div class="context-meta">${subMeta}</div>
       ${costBreakdown(g.turns)}
       ${subCards}
@@ -325,14 +325,15 @@ function buildHtml(trace: ConnectorTrace): string {
   return `<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Trace — ${esc(trace.connector)} — ${esc(trace.runId)}</title>
+<title>Trace — ${esc(trace.runLabel)} — ${esc(trace.runId)}</title>
 <style>${CSS}</style>
 </head><body>
 <header>
   <h1>Trace</h1>
-  <span class="run-meta">${esc(trace.connector)} · ${esc(trace.months)}mo</span>
+  <span class="run-meta">${esc(trace.runLabel)}</span>
   <span class="run-meta">${esc(trace.runId.slice(0, 8))}</span>
   <span class="run-meta">${esc(ts)}</span>
+  <span class="run-meta">$${trace.totalCostUsd.toFixed(4)} · ${fmtDuration(trace.totalDurationMs)}</span>
 </header>
 <main>
   <div class="section"><h2>Summary</h2>${summaryTable(trace)}</div>

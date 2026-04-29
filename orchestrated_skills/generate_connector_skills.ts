@@ -17,7 +17,7 @@ import { runBatchAnalyzer } from "../agents/batch_analyzer.js";
 import { runConsolidator } from "../agents/consolidator.js";
 import { runIssueWriter } from "../agents/issue_writer.js";
 import type { Symptom } from "../agents/types.js";
-import { OrchestratorTracer } from "../commons/tracer.js";
+import { OrchestratorTracer } from "./tracer.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RUN_ID = randomUUID();

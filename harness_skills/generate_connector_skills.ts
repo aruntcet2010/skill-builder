@@ -229,7 +229,7 @@ async function runConnector(connector: string, months: number, usePreset: boolea
     },
   ];
 
-  const tracer = new RunTracer(connector, months, RUN_ID, prompt, availableTools);
+  const tracer = new RunTracer(`${connector} · ${months}mo`, RUN_ID, prompt, availableTools);
 
   for await (const message of tracer.capture(query({
     prompt,
