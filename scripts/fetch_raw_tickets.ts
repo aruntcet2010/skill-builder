@@ -64,10 +64,7 @@ const CONNECTOR_MAP: Record<string, string> = {
 // ---------------------------------------------------------------------------
 // SQL
 // ---------------------------------------------------------------------------
-const SQL_PATH = path.resolve(
-  import.meta.dirname,
-  "../../hevo-connector-agent/scripts/tickets_summary/zendesk_tickets_by_connector.sql"
-);
+const SQL_PATH = path.join(SCRIPTS_DIR, "zendesk_tickets_by_connector.sql");
 
 function adaptSql(rawSql: string): string {
   return rawSql
