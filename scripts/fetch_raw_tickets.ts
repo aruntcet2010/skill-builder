@@ -10,9 +10,9 @@ import snowflake from "snowflake-sdk";
 import fs from "fs/promises";
 import path from "path";
 import { config as loadEnv } from "dotenv";
-import os from "os";
+import { fileURLToPath } from "url";
 
-loadEnv({ path: path.join(os.homedir(), "Downloads/repos/atlas/.env") });
+loadEnv({ path: path.join(path.dirname(fileURLToPath(import.meta.url)), "../.env") });
 snowflake.configure({ logLevel: "ERROR" } as any);
 
 // ---------------------------------------------------------------------------
