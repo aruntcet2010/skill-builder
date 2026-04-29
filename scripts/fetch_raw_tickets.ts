@@ -285,7 +285,7 @@ function writeMetadataMarkdown(label: string, metas: TicketMeta[]): string {
   ];
   for (const m of metas) {
     lines.push(
-      `| [${m.filename}](${m.filename}) | ${m.title.slice(0, 60)} | ${m.status} | ${m.priority} | ${m.commentCount} |`
+      `| [${m.filename}](${m.filename}) | ${m.title.replace(/\|/g, "·").slice(0, 60)} | ${m.status} | ${m.priority} | ${m.commentCount} |`
     );
   }
   return lines.join("\n");
