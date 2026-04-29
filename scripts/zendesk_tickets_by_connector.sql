@@ -22,19 +22,23 @@
 
 WITH target_tickets AS (
     SELECT t.ID
-    FROM HEVO_ANALYTICS.RAW.RAW_ZD_TICKETS t,
-         LATERAL FLATTEN(input => t.CUSTOM_FIELDS) f
+    FROM HEVO_ANALYTICS.RAW.RAW_ZD_TICKETS t
     LEFT JOIN HEVO_ANALYTICS.RAW.RAW_ZD_USERS req ON t.REQUESTER_ID = req.ID
-    WHERE f.value['id']::NUMBER = 6344831219737       -- connector type selector
-      AND f.value['value']::VARCHAR = %(connector_value)s
-      AND t.STATUS != 'deleted'
-      -- Exclude Hevo-internal tickets (staff raising tickets against their own system)
-      AND LOWER(SPLIT_PART(COALESCE(req.EMAIL, ''), '@', 2)) NOT LIKE '%hevo%'
-      -- Exclude automated alert tickets via Zendesk tags (more reliable than subject matching)
-      AND NOT (
-            ARRAY_CONTAINS('internal_alert'::VARIANT, t.TAGS)
-            OR ARRAY_CONTAINS('proactive_alert'::VARIANT, t.TAGS)
-      )
+    WHERE t.ID IN (
+        SELECT t2.ID
+        FROM HEVO_ANALYTICS.RAW.RAW_ZD_TICKETS t2,
+             LATERAL FLATTEN(input => t2.CUSTOM_FIELDS) f
+        WHERE f.value['id']::NUMBER = 6344831219737   -- connector type selector
+          AND f.value['value']::VARCHAR = %(connector_value)s
+    )
+    AND t.STATUS != 'deleted'
+    -- Exclude Hevo-internal tickets (staff raising tickets against their own system)
+    AND LOWER(SPLIT_PART(COALESCE(req.EMAIL, ''), '@', 2)) NOT LIKE '%hevo%'
+    -- Exclude automated alert tickets via Zendesk tags (more reliable than subject matching)
+    AND NOT (
+          ARRAY_CONTAINS('internal_alert'::VARIANT, t.TAGS)
+          OR ARRAY_CONTAINS('proactive_alert'::VARIANT, t.TAGS)
+    )
 ),
 
 custom_field_values AS (
