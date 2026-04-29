@@ -103,13 +103,6 @@ Merge all subagent results into one master issue list:
 - Sort by number of ticket_ids descending (most frequent first)
 - Number them sequentially: issue1, issue2, issue3...
 
-## Step 4.5 — Save consolidated JSON
-Write the full master issue list to /tmp/${connector}_issues.json using the Bash tool:
-\`\`\`
-echo '<json array>' > /tmp/${connector}_issues.json
-\`\`\`
-This preserves the raw subagent output for debugging.
-
 ## Step 5 — Write one file per issue
 For each issue N, write: \`${connectorDir}/issue{N}.md\`
 
