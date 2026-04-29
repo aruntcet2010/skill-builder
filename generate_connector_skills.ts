@@ -164,30 +164,11 @@ Start now with Step 1.
 `.trim();
 }
 
-// ---------------------------------------------------------------------------
-// OpenTelemetry env — sends traces/metrics/logs to local Jaeger.
-// Start Jaeger: docker run -d --name jaeger -p 16686:16686 -p 4318:4318 jaegertracing/all-in-one:latest
-// View traces:  http://localhost:16686
-//
-// env replaces process.env inside the SDK subprocess, so spread process.env
-// first to preserve PATH, ANTHROPIC_API_KEY, etc.
-// ---------------------------------------------------------------------------
+// OTEL_LOG_RAW_API_BODIES writes full API request/response JSON to disk.
+// loadBodies() reads these files to enrich the HTML trace with messages and tool defs.
 const otelEnv: Record<string, string> = {
   CLAUDE_CODE_ENABLE_TELEMETRY: "1",
-  CLAUDE_CODE_ENHANCED_TELEMETRY_BETA: "1",
-  OTEL_TRACES_EXPORTER: "otlp",
-  OTEL_METRICS_EXPORTER: "otlp",
-  OTEL_LOGS_EXPORTER: "otlp",
-  OTEL_EXPORTER_OTLP_PROTOCOL: "http/protobuf",
-  OTEL_EXPORTER_OTLP_ENDPOINT: "http://localhost:4318",
-  OTEL_TRACES_EXPORT_INTERVAL: "1000",
-  OTEL_METRIC_EXPORT_INTERVAL: "5000",
-  OTEL_LOGS_EXPORT_INTERVAL: "1000",
-  OTEL_LOG_TOOL_DETAILS: "1",       // tool names, file paths, commands in span attrs
-  OTEL_LOG_USER_PROMPTS: "1",       // user prompt text on interaction span
-  OTEL_LOG_TOOL_CONTENT: "1",       // full tool input+output bodies (truncated at 60KB)
-  OTEL_LOG_RAW_API_BODIES: `file:/tmp/otel_bodies_${RUN_ID}`,  // full API request/response JSON written to disk
-  OTEL_SERVICE_NAME: "skill-builder",
+  OTEL_LOG_RAW_API_BODIES: `file:/tmp/otel_bodies_${RUN_ID}`,
 };
 
 // ---------------------------------------------------------------------------
