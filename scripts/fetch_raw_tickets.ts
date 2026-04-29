@@ -149,9 +149,14 @@ function humanise(key: string): string {
 }
 
 function cleanText(text: string): string {
-  // Strip HTML tags, collapse whitespace
   return text
     .replace(/<[^>]+>/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&nbsp;/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }

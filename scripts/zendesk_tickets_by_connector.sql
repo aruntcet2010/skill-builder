@@ -1,5 +1,6 @@
 -- Fetch all Zendesk tickets for a given connector with custom fields and comments.
--- Parameter: %(connector_value)s — the Snowflake custom-field value for the connector.
+-- Parameter 1: connector_value — the Snowflake custom-field value for the connector.
+-- Parameter 2: months        — negative integer, e.g. -6 for last 6 months.
 --
 -- Zendesk custom field IDs (from Hevo's Zendesk instance):
 --   6344831219737  = connector type selector
@@ -23,15 +24,17 @@ WITH target_tickets AS (
     SELECT t.ID
     FROM HEVO_ANALYTICS.RAW.RAW_ZD_TICKETS t,
          LATERAL FLATTEN(input => t.CUSTOM_FIELDS) f
+    LEFT JOIN HEVO_ANALYTICS.RAW.RAW_ZD_USERS req ON t.REQUESTER_ID = req.ID
     WHERE f.value['id']::NUMBER = 6344831219737       -- connector type selector
       AND f.value['value']::VARCHAR = %(connector_value)s
-      -- Exclude automated internal alerts (reduces MySQL tickets by ~80%%)
-      AND t.SUBJECT NOT LIKE 'CRITICAL - [Connector Alert%%'
-      AND t.SUBJECT NOT LIKE '[Proactive Alert%%'
-      AND t.SUBJECT NOT LIKE '[HEVO Alert%%'
-      AND t.SUBJECT NOT LIKE '[Hevo Alert%%'
-      AND t.SUBJECT NOT LIKE '[Coralogix%%'
-      AND t.SUBJECT NOT LIKE '%%Connectors: CDC Lag SLA Breached%%'
+      AND t.STATUS != 'deleted'
+      -- Exclude Hevo-internal tickets (staff raising tickets against their own system)
+      AND LOWER(SPLIT_PART(COALESCE(req.EMAIL, ''), '@', 2)) NOT LIKE '%hevo%'
+      -- Exclude automated alert tickets via Zendesk tags (more reliable than subject matching)
+      AND NOT (
+            ARRAY_CONTAINS('internal_alert'::VARIANT, t.TAGS)
+            OR ARRAY_CONTAINS('proactive_alert'::VARIANT, t.TAGS)
+      )
 ),
 
 custom_field_values AS (
@@ -61,11 +64,12 @@ ticket_comments AS (
     SELECT c.TICKET_ID,
            ARRAY_AGG(
                OBJECT_CONSTRUCT(
-                   'comment_id', c.ID::VARCHAR,
+                   'comment_id',  c.ID::VARCHAR,
                    'author_name', u.NAME,
-                   'is_public', c.PUBLIC,
-                   'created_at', c.CREATED_AT,
-                   'body_text', COALESCE(c.PLAIN_BODY, c.HTML_BODY, c.BODY)
+                   'is_agent',    IFF(u.ROLE IN ('agent', 'admin'), TRUE, FALSE),
+                   'is_public',   c.PUBLIC,
+                   'created_at',  c.CREATED_AT,
+                   'body_text',   COALESCE(c.PLAIN_BODY, c.HTML_BODY, c.BODY)
                )
            ) WITHIN GROUP (ORDER BY c.CREATED_AT ASC) AS comments_json,
            COUNT(*) AS comment_count
