@@ -212,7 +212,7 @@ async function runConnector(connector: string, months: number): Promise<void> {
   console.log("=".repeat(60));
 
   const connectorDir = path.join(SKILL_DIR, connector);
-  const tracer = new OrchestratorTracer(connector, months, RUN_ID);
+  const tracer = new OrchestratorTracer(connector, months, RUN_ID, connectorDir);
 
   // Step 1
   await fetchTickets(connector, months);

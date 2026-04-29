@@ -49,6 +49,7 @@ export class OrchestratorTracer {
     private readonly connector: string,
     private readonly months: number,
     private readonly runId: string,
+    private readonly liveDir?: string,  // if set, writes trace.html after each agent run completes
   ) {}
 
   async *capture(
@@ -121,6 +122,7 @@ export class OrchestratorTracer {
           totalCostUsd: r.total_cost_usd ?? turns.reduce((s, t) => s + t.costUsd, 0),
           totalDurationMs: Date.now() - startMs,
         });
+        if (this.liveDir) this.flushLive().catch(() => {});
       }
       yield msg;
     }
@@ -201,8 +203,8 @@ export class OrchestratorTracer {
     }
   }
 
-  async writeReport(outputDir: string): Promise<string> {
-    const trace: OrchestratorTrace = {
+  private buildTrace(): OrchestratorTrace {
+    return {
       connector: this.connector,
       months: this.months,
       runId: this.runId,
@@ -211,9 +213,18 @@ export class OrchestratorTracer {
       totalCostUsd: this.agentRuns.reduce((s, r) => s + r.totalCostUsd, 0),
       totalDurationMs: Date.now() - this.startMs,
     };
+  }
+
+  private async flushLive(): Promise<void> {
+    if (!this.liveDir) return;
+    await fs.mkdir(this.liveDir, { recursive: true });
+    await fs.writeFile(path.join(this.liveDir, "trace.html"), buildHtml(this.buildTrace()), "utf8");
+  }
+
+  async writeReport(outputDir: string): Promise<string> {
     await fs.mkdir(outputDir, { recursive: true });
     const htmlPath = path.join(outputDir, "trace.html");
-    await fs.writeFile(htmlPath, buildHtml(trace), "utf8");
+    await fs.writeFile(htmlPath, buildHtml(this.buildTrace()), "utf8");
     return htmlPath;
   }
 }
