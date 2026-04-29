@@ -213,7 +213,7 @@ async function runConnector(connector: string, months: number): Promise<void> {
 
   const connectorDir = path.join(SKILL_DIR, connector);
   const tracer = new OrchestratorTracer(connector, months, RUN_ID, connectorDir);
-  await tracer.writeReport(connectorDir); // write empty trace immediately so the file is openable
+  console.log(`  [${connector}] trace → ${path.join(connectorDir, "trace.html")} (updates as agents complete)`);
 
   // Step 1
   await fetchTickets(connector, months);
@@ -245,8 +245,7 @@ async function runConnector(connector: string, months: number): Promise<void> {
 
   // Write trace
   await tracer.loadBodies();
-  const htmlPath = await tracer.writeReport(connectorDir);
-  console.log(`  [${connector}] trace → ${htmlPath}`);
+  await tracer.writeReport(connectorDir);
 }
 
 // ---------------------------------------------------------------------------
