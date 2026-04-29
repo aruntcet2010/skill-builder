@@ -1,6 +1,6 @@
 import { query, type SDKMessage, type SDKAssistantMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { OrchestratorTracer } from "../tracer_v2.js";
-import type { ToolDef } from "../tracer_shared.js";
+import type { OrchestratorTracer } from "../v2/tracer.js";
+import type { ToolDef } from "../commons/tracer_commons.js";
 import type { SymptomSummary } from "./types.js";
 
 const TOOLS: ToolDef[] = [{ name: "Read", type: "builtin", description: "Read file contents" }];

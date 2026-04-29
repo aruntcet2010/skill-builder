@@ -13,13 +13,13 @@ import { fileURLToPath } from "url";
 import fs from "fs/promises";
 import { randomUUID } from "crypto";
 import { spawn } from "child_process";
-import { runBatchAnalyzer } from "./agents/batch_analyzer.js";
-import { runConsolidator } from "./agents/consolidator.js";
-import { runIssueWriter } from "./agents/issue_writer.js";
-import type { Symptom } from "./agents/types.js";
-import { OrchestratorTracer } from "./tracer_v2.js";
+import { runBatchAnalyzer } from "../agents/batch_analyzer.js";
+import { runConsolidator } from "../agents/consolidator.js";
+import { runIssueWriter } from "../agents/issue_writer.js";
+import type { Symptom } from "../agents/types.js";
+import { OrchestratorTracer } from "./tracer.js";
 
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)));
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RUN_ID = randomUUID();
 const SKILL_DIR = path.join(REPO_ROOT, "generated", RUN_ID, "connector-oncall");
 
