@@ -586,7 +586,8 @@ function availableToolsSection(tools: ToolDef[]): string {
 }
 
 function callCard(turn: Turn, totalCost: number, prompt: string, tools: ToolDef[] = []): string {
-  const tokenRow = `in=${turn.inputTokens.toLocaleString()} | out=${turn.outputTokens.toLocaleString()} | cache_read=${turn.cacheReadTokens.toLocaleString()} | cache_creation=${turn.cacheCreationTokens.toLocaleString()}`;
+  const totalIn = turn.inputTokens + turn.cacheReadTokens + turn.cacheCreationTokens;
+  const tokenRow = `in=${totalIn.toLocaleString()} | out=${turn.outputTokens.toLocaleString()} | cache_read=${turn.cacheReadTokens.toLocaleString()} | cache_creation=${turn.cacheCreationTokens.toLocaleString()}`;
   const elapsed = `<span class="call-elapsed">@ ${fmtDuration(turn.elapsedMs)}</span>`;
   const thought = turn.text ? `<div class="thought">${esc(turn.text)}</div>` : "";
   const toolBlocks = turn.toolUses.map(toolBlock).join("");
