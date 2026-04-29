@@ -36,30 +36,26 @@ const ALL_CONNECTORS = [
 ];
 
 // ---------------------------------------------------------------------------
-// Subagent definition — ticket batch analyzer
+// Subagent 1 — lightweight batch analyzer (first pass: symptom identification only)
 // ---------------------------------------------------------------------------
 const TICKET_BATCH_ANALYZER: AgentDefinition = {
   description:
-    "Reads a batch of Zendesk support ticket markdown files and extracts distinct issues as a JSON array. " +
-    "Use this agent for each batch of ticket file paths that needs to be processed in parallel.",
+    "Reads a batch of Zendesk support ticket markdown files and returns a lightweight JSON array of customer-visible symptoms. " +
+    "Used for the first pass only — identification and deduplication, not detailed analysis.",
   prompt: `You are a support ticket analyst. You will receive a list of ticket file paths.
 
-Read each file using the Read tool, then extract every distinct issue present across all the tickets.
+Read each file using the Read tool, then identify every distinct customer-visible symptom across all the tickets.
 
-For each distinct issue return a JSON object with these fields:
-- title: concise issue title (max 15 words)
+For each distinct symptom group return a JSON object with these fields:
+- title: concise symptom title from the customer's perspective (max 15 words, e.g. "Binlog Not Syncing", "OAuth Token Keeps Expiring")
 - severity: "critical" | "high" | "medium" | "low" (use the highest seen across related tickets)
-- components: string array of affected components or areas
-- description: what the customer experiences (2-3 sentences)
-- root_cause: technical root cause (2-3 sentences)
-- resolution: how to fix or work around it (2-3 sentences)
-- customer_impact: business impact on the customer (1-2 sentences)
-- ticket_ids: string array of ticket IDs from the files that relate to this issue
+- description: one sentence describing what the customer sees (based only on ticket content)
+- ticket_ids: string array of ALL ticket IDs in this symptom group
 
 Rules:
-- Read ALL files before extracting issues
-- Group tickets that share the same underlying root cause into one issue
-- One ticket can only belong to one issue (pick the best match)
+- Read ALL files before extracting symptoms
+- Group by customer-visible symptom — same symptom, different root cause = same group
+- One ticket can only belong to one symptom group (pick the best match)
 - Return ONLY a valid JSON array — no markdown, no explanation, no code fences
 - If a ticket has no useful signal (e.g. spam, test ticket), skip it`,
   tools: ["Read"],
@@ -67,7 +63,56 @@ Rules:
 };
 
 // ---------------------------------------------------------------------------
-// Main agent prompt — only generates {connector}/ files, not SKILL.md
+// Subagent 2 — issue file writer (second pass: deep analysis per symptom)
+// ---------------------------------------------------------------------------
+const ISSUE_FILE_WRITER: AgentDefinition = {
+  description:
+    "Reads all Zendesk ticket files for a specific customer-visible symptom and writes a detailed issue markdown file. " +
+    "Used in the second pass — one subagent per symptom, writing the final {slug}.md file.",
+  prompt: `You are a support ticket analyst writing a detailed oncall issue file.
+
+You will be given:
+- A symptom title and output file path
+- A list of ticket file paths that all relate to this symptom
+
+Read every ticket file using the Read tool, then write a detailed issue file to the given output path using the Write tool.
+
+The issue file must follow this exact format:
+
+\`\`\`
+# {title}
+
+**Severity:** {highest severity seen} | **Tickets:** {total ticket count}
+
+## What the Customer Sees
+{2-3 sentences describing exactly what the customer experiences, using their own words and error messages from the tickets}
+
+## Cause 1: {brief cause label}
+**Root Cause:** {detailed technical root cause based on ticket content}
+
+**Resolution:** {specific steps to fix or work around this cause, based on what worked in the tickets}
+
+**Tickets:** {comma-separated ticket IDs for this cause}
+
+## Cause 2: {brief cause label}
+...repeat for each distinct root cause found across the tickets...
+
+## All Related Tickets
+{comma-separated ticket IDs across all causes}
+\`\`\`
+
+Rules:
+- Read ALL ticket files before writing
+- Extract exact error messages and keywords from the tickets — do not paraphrase
+- Group tickets under the cause that best explains them
+- If all tickets share the same root cause, write only one Cause section
+- Write the file when done — do not return the content as text`,
+  tools: ["Read", "Write"],
+  model: "claude-sonnet-4-6",
+};
+
+// ---------------------------------------------------------------------------
+// Main agent prompt
 // ---------------------------------------------------------------------------
 function buildPrompt(connector: string, months: number): string {
   const connectorDir = `${SKILL_DIR}/${connector}`;
@@ -84,74 +129,63 @@ This writes one markdown file per ticket + metadata.md into /tmp/${connector}_ti
 
 ## Step 2 — Read the metadata index
 Read /tmp/${connector}_tickets/metadata.md to get the full list of ticket filenames and total count.
-If 0 tickets, write ${connectorDir}/selection.md with a single line: "No tickets found in the last 6 months." and stop.
+If 0 tickets, write ${connectorDir}/selection.md with a single line: "No tickets found in the last ${months} month(s)." and stop.
 
-## Step 3 — Spawn parallel batch subagents
+## Step 3 — First pass: identify symptoms in parallel
 Divide the ticket filenames into batches of 5. Invoke the "ticket-batch-analyzer" subagent for EVERY batch IN PARALLEL in a single response — do not wait for one to finish before starting the next.
 
 For each batch subagent call, pass the list of full file paths as the prompt:
-"Read and analyze these ticket files, return issues as JSON:
+"Read and analyze these ticket files, return symptoms as JSON:
 /tmp/${connector}_tickets/ticket_X.md
 /tmp/${connector}_tickets/ticket_Y.md
 ..."
 
-Each subagent reads the files and returns a JSON array of issues. Collect all results.
+Each subagent returns a lightweight JSON array of symptoms. Collect all results.
 
-## Step 4 — Consolidate
-Merge all subagent results into one master issue list:
-- Issues with the same root cause → merge (combine ticket_ids, keep highest severity)
-- Sort by number of ticket_ids descending (most frequent first)
-- Number them sequentially: issue1, issue2, issue3...
+## Step 4 — Consolidate and rank
+Merge all subagent results into one master symptom list:
+- Compare every pair of symptom groups — if they describe the same customer-visible symptom (even if worded differently), merge them: combine ticket_ids, keep the highest severity
+- Sort by total number of ticket_ids descending (most frequent symptom first)
+- Take the top 20 symptoms
+- Assign each a unique slug: 3-4 word kebab-case describing the customer symptom (e.g. "binlog-not-syncing", "oauth-token-expired", "pipeline-stuck-ingesting")
 
-## Step 5 — Write one file per issue
-For each issue N, write: \`${connectorDir}/issue{N}.md\`
+## Step 5 — Second pass: write issue files in parallel
+For each of the top 20 symptoms, invoke the "issue-file-writer" subagent IN PARALLEL in a single response.
 
-\`\`\`
-# Issue {N}: {title}
+For each subagent call, pass this prompt:
+"Symptom: {title}
+Output file: ${connectorDir}/{slug}.md
+Ticket files:
+/tmp/${connector}_tickets/ticket_X.md
+/tmp/${connector}_tickets/ticket_Y.md
+..."
 
-**Severity:** {X} | **Tickets:** {Y} | **Components:** {A, B}
-
-## Description
-{what the customer experiences}
-
-## Root Cause
-{technical root cause}
-
-## Resolution
-{how to fix or work around it}
-
-## Customer Impact
-{business impact}
-
-## Related Tickets
-{comma-separated ticket IDs}
-\`\`\`
+Each subagent reads the raw tickets and writes the full {slug}.md file directly. Wait for all to complete.
 
 ## Step 6 — Write selection.md
-Write: \`${connectorDir}/selection.md\`
+Once all issue files are written, write: \`${connectorDir}/selection.md\`
 
 \`\`\`
 # ${connector.charAt(0).toUpperCase() + connector.slice(1)} — Issue Index
 
-**{M} tickets → {N} distinct issues** (last 6 months)
+**{M} tickets → {N} distinct symptoms** (last ${months} month(s))
 
 ## Symptom → Issue Mapping
 
-→ **"{error keyword or message}"** → [Issue {N}: {title}](issue{N}.md)
-→ **"{component or behaviour}"** → [Issue {N}: {title}](issue{N}.md)
+→ **"{error keyword or message}"** → [{title}]({slug}.md)
+→ **"{component or behaviour}"** → [{title}]({slug}.md)
 ...one line per common symptom, using actual keywords from the tickets...
 
 ## All Issues (most frequent first)
 
-| # | Title | Severity | Tickets | File |
-|---|-------|----------|---------|------|
-| {N} | {title} | {severity} | {count} | [issue{N}.md](issue{N}.md) |
+| Title | Severity | Tickets | File |
+|-------|----------|---------|------|
+| {title} | {severity} | {count} | [{slug}.md]({slug}.md) |
 \`\`\`
 
 Rules:
-- Write all issue files before writing selection.md
 - Symptom → Issue Mapping must use actual error messages and keywords from the ticket content
-- Every issue listed in selection.md must have a corresponding issue{N}.md file
+- Every issue listed in selection.md must have a corresponding {slug}.md file
 
 Start now with Step 1.
 `.trim();
@@ -180,11 +214,18 @@ async function runConnector(connector: string, months: number, usePreset: boolea
     { name: "Read",  type: "builtin", description: "Read file contents" },
     { name: "Write", type: "builtin", description: "Write file contents" },
     {
-      name: "Agent",
+      name: "Agent (ticket-batch-analyzer)",
       type: "subagent",
       description: TICKET_BATCH_ANALYZER.description,
       model: TICKET_BATCH_ANALYZER.model,
       tools: TICKET_BATCH_ANALYZER.tools as string[],
+    },
+    {
+      name: "Agent (issue-file-writer)",
+      type: "subagent",
+      description: ISSUE_FILE_WRITER.description,
+      model: ISSUE_FILE_WRITER.model,
+      tools: ISSUE_FILE_WRITER.tools as string[],
     },
   ];
 
@@ -202,6 +243,7 @@ async function runConnector(connector: string, months: number, usePreset: boolea
       cwd: REPO_ROOT,
       agents: {
         "ticket-batch-analyzer": TICKET_BATCH_ANALYZER,
+        "issue-file-writer": ISSUE_FILE_WRITER,
       },
       env: { ...process.env, ...otelEnv },
     },
