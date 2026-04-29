@@ -213,6 +213,7 @@ async function runConnector(connector: string, months: number): Promise<void> {
 
   const connectorDir = path.join(SKILL_DIR, connector);
   const tracer = new OrchestratorTracer(connector, months, RUN_ID, connectorDir);
+  await tracer.writeReport(connectorDir); // write empty trace immediately so the file is openable
 
   // Step 1
   await fetchTickets(connector, months);
