@@ -9,7 +9,8 @@ import path from "path";
 import {
   PRICING, DEFAULT_PRICING, calcCost,
   CSS, JS, esc, fmtDuration, costBar, costBreakdown,
-  toolPills, toolBlock, availableToolsSection,
+  toolPills, toolBlock, availableToolsSection, callCard, messagesSection,
+  renderContent, extractFirstUserText, extractSystemPrompt, extractToolDefs, buildMessages,
   type ToolUse, type ToolDef, type Turn, type ApiMessage,
 } from "./tracer_shared.js";
 
@@ -35,68 +36,8 @@ export interface ConnectorTrace {
   totalDurationMs: number;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function renderContent(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return JSON.stringify(content);
-  return content.map((b: any) => {
-    if (b.type === "text") return b.text ?? "";
-    if (b.type === "tool_use") return `→ ${b.name}(${JSON.stringify(b.input ?? {})})`;
-    if (b.type === "tool_result") {
-      const out = Array.isArray(b.content)
-        ? b.content.map((c: any) => c.text ?? "").join("")
-        : String(b.content ?? "");
-      return `[tool_result: ${out.slice(0, 300)}${out.length > 300 ? "…" : ""}]`;
-    }
-    return JSON.stringify(b);
-  }).join("\n");
-}
-
 // ── Body-file helpers ─────────────────────────────────────────────────────────
-
-function extractFirstUserText(req: Record<string, unknown>): string {
-  for (const msg of (req as any).messages ?? []) {
-    if (msg.role !== "user") continue;
-    const content = msg.content;
-    if (typeof content === "string") {
-      if (!content.includes("system-reminder") && !content.includes("userEmail")) return content;
-    } else if (Array.isArray(content)) {
-      for (const block of content) {
-        const t: string = block?.text ?? "";
-        if (block?.type === "text" && !t.includes("system-reminder") && !t.includes("userEmail")) return t;
-      }
-    }
-  }
-  return "";
-}
-
-function extractSystemPrompt(req: Record<string, unknown>): string {
-  const sys = (req as any).system ?? [];
-  return Array.isArray(sys)
-    ? sys.map((b: any) => (typeof b === "string" ? b : b.text ?? "")).join("\n\n")
-    : String(sys);
-}
-
-function extractToolDefs(req: Record<string, unknown>, fallback: ToolDef[]): ToolDef[] {
-  const raw: any[] = (req as any).tools ?? [];
-  if (!raw.length) return fallback;
-  const metaByName = new Map(fallback.map(t => [t.name, t]));
-  return raw.map((t: any) => ({
-    name: t.name ?? "",
-    description: t.description ?? "",
-    type: metaByName.get(t.name)?.type ?? "builtin",
-    model: metaByName.get(t.name)?.model,
-    tools: metaByName.get(t.name)?.tools,
-  }));
-}
-
-function buildMessages(req: Record<string, unknown>): ApiMessage[] {
-  return ((req as any).messages ?? []).map((m: any) => ({
-    role: m.role as "user" | "assistant",
-    content: renderContent(m.content),
-  }));
-}
+// (renderContent, extractFirstUserText, extractSystemPrompt, extractToolDefs, buildMessages imported from tracer_shared)
 
 // ── Tracer ────────────────────────────────────────────────────────────────────
 
@@ -317,62 +258,7 @@ export class RunTracer {
 }
 
 // ── v1-specific HTML helpers ──────────────────────────────────────────────────
-
-function messagesSection(turn: Turn, prompt: string): string {
-  if (turn.messages && turn.messages.length > 0) {
-    const sys = turn.systemPrompt
-      ? `<div class="msg"><div class="msg-role" style="color:var(--amber)">SYSTEM</div><div class="msg-content">${esc(turn.systemPrompt)}</div></div>`
-      : "";
-    const msgs = turn.messages.map(m => {
-      const roleColor = m.role === "user" ? "var(--accent)" : "var(--green)";
-      return `<div class="msg">
-  <div class="msg-role" style="color:${roleColor}">${esc(m.role.toUpperCase())}</div>
-  <div class="msg-content">${esc(m.content)}</div>
-</div>`;
-    }).join("");
-    return `<details class="messages">
-  <summary>Messages (${turn.messages.length + (turn.systemPrompt ? 1 : 0)})</summary>
-  <div class="msg-list">${sys}${msgs}</div>
-</details>`;
-  }
-  if (turn.seq === 1) {
-    return `<details class="messages">
-  <summary>Initial prompt</summary>
-  <div class="msg-list">
-    <div class="msg">
-      <div class="msg-role" style="color:var(--accent)">USER</div>
-      <div class="msg-content">${esc(prompt)}</div>
-    </div>
-  </div>
-</details>`;
-  }
-  return "";
-}
-
-function callCard(turn: Turn, totalCost: number, prompt: string, tools: ToolDef[] = []): string {
-  const totalIn = turn.inputTokens + turn.cacheReadTokens + turn.cacheCreationTokens;
-  const tokenRow = `in=${totalIn.toLocaleString()} | out=${turn.outputTokens.toLocaleString()} | cache_read=${turn.cacheReadTokens.toLocaleString()} | cache_creation=${turn.cacheCreationTokens.toLocaleString()}`;
-  const elapsed = `<span class="call-elapsed">@ ${fmtDuration(turn.elapsedMs)}</span>`;
-  const thought = turn.text ? `<div class="thought">${esc(turn.text)}</div>` : "";
-  const toolBlocks = turn.toolUses.map(toolBlock).join("");
-  return `<div class="call-card">
-  <div class="call-header">
-    <span class="call-seq">Call ${turn.seq}</span>
-    <span class="call-model">${esc(turn.model)}</span>
-    <span class="call-cost">$${turn.costUsd.toFixed(4)}</span>
-    ${elapsed}
-    ${toolPills(turn.toolUses)}
-    ${costBar(turn.costUsd, totalCost)}
-    <span class="chevron">▶</span>
-  </div>
-  <div class="call-body">
-    <div class="token-row">${esc(tokenRow)}</div>
-    ${thought}${toolBlocks}
-    ${availableToolsSection(tools)}
-    ${messagesSection(turn, prompt)}
-  </div>
-</div>`;
-}
+// (messagesSection, callCard imported from tracer_shared)
 
 function summaryTable(trace: ConnectorTrace): string {
   const n = trace.turns.length;

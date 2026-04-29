@@ -158,6 +158,67 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 `;
 
+// ── Body-file helpers ─────────────────────────────────────────────────────────
+
+export function renderContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return JSON.stringify(content);
+  return (content as any[]).map((b) => {
+    if (b.type === "text") return b.text ?? "";
+    if (b.type === "tool_use") return `→ ${b.name}(${JSON.stringify(b.input ?? {})})`;
+    if (b.type === "tool_result") {
+      const out = Array.isArray(b.content)
+        ? b.content.map((c: any) => c.text ?? "").join("")
+        : String(b.content ?? "");
+      return `[tool_result: ${out.slice(0, 300)}${out.length > 300 ? "…" : ""}]`;
+    }
+    return JSON.stringify(b);
+  }).join("\n");
+}
+
+export function extractFirstUserText(req: Record<string, unknown>): string {
+  for (const msg of (req as any).messages ?? []) {
+    if (msg.role !== "user") continue;
+    const content = msg.content;
+    if (typeof content === "string") {
+      if (!content.includes("system-reminder") && !content.includes("userEmail")) return content;
+    } else if (Array.isArray(content)) {
+      for (const block of content) {
+        const t: string = block?.text ?? "";
+        if (block?.type === "text" && !t.includes("system-reminder") && !t.includes("userEmail")) return t;
+      }
+    }
+  }
+  return "";
+}
+
+export function extractSystemPrompt(req: Record<string, unknown>): string {
+  const sys = (req as any).system ?? [];
+  return Array.isArray(sys)
+    ? sys.map((b: any) => (typeof b === "string" ? b : b.text ?? "")).join("\n\n")
+    : String(sys);
+}
+
+export function extractToolDefs(req: Record<string, unknown>, fallback: ToolDef[]): ToolDef[] {
+  const raw: any[] = (req as any).tools ?? [];
+  if (!raw.length) return fallback;
+  const metaByName = new Map(fallback.map(t => [t.name, t]));
+  return raw.map((t: any) => ({
+    name: t.name ?? "",
+    description: t.description ?? "",
+    type: metaByName.get(t.name)?.type ?? "builtin",
+    model: metaByName.get(t.name)?.model,
+    tools: metaByName.get(t.name)?.tools,
+  }));
+}
+
+export function buildMessages(req: Record<string, unknown>): ApiMessage[] {
+  return ((req as any).messages ?? []).map((m: any) => ({
+    role: m.role as "user" | "assistant",
+    content: renderContent(m.content),
+  }));
+}
+
 // ── Rendering helpers ─────────────────────────────────────────────────────────
 export function esc(s: unknown): string {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -240,15 +301,43 @@ export function availableToolsSection(tools: ToolDef[]): string {
 </details>`;
 }
 
+export function messagesSection(turn: Turn, prompt: string): string {
+  if (turn.messages && turn.messages.length > 0) {
+    const sys = turn.systemPrompt
+      ? `<div class="msg"><div class="msg-role" style="color:var(--amber)">SYSTEM</div><div class="msg-content">${esc(turn.systemPrompt)}</div></div>`
+      : "";
+    const msgs = turn.messages.map(m => {
+      const roleColor = m.role === "user" ? "var(--accent)" : "var(--green)";
+      return `<div class="msg">
+  <div class="msg-role" style="color:${roleColor}">${esc(m.role.toUpperCase())}</div>
+  <div class="msg-content">${esc(m.content)}</div>
+</div>`;
+    }).join("");
+    return `<details class="messages">
+  <summary>Messages (${turn.messages.length + (turn.systemPrompt ? 1 : 0)})</summary>
+  <div class="msg-list">${sys}${msgs}</div>
+</details>`;
+  }
+  if (turn.seq === 1 && prompt) {
+    return `<details class="messages">
+  <summary>Initial prompt</summary>
+  <div class="msg-list">
+    <div class="msg">
+      <div class="msg-role" style="color:var(--accent)">USER</div>
+      <div class="msg-content">${esc(prompt)}</div>
+    </div>
+  </div>
+</details>`;
+  }
+  return "";
+}
+
 export function callCard(turn: Turn, totalCost: number, prompt: string, tools: ToolDef[] = []): string {
   const totalIn = turn.inputTokens + turn.cacheReadTokens + turn.cacheCreationTokens;
   const tokenRow = `in=${totalIn.toLocaleString()} | out=${turn.outputTokens.toLocaleString()} | cache_read=${turn.cacheReadTokens.toLocaleString()} | cache_creation=${turn.cacheCreationTokens.toLocaleString()}`;
   const elapsed = `<span class="call-elapsed">@ ${fmtDuration(turn.elapsedMs)}</span>`;
   const thought = turn.text ? `<div class="thought">${esc(turn.text)}</div>` : "";
   const toolBlocks = turn.toolUses.map(toolBlock).join("");
-  const promptSection = turn.seq === 1 && prompt
-    ? `<details class="available-tools"><summary>Prompt</summary><div class="tools-list"><div class="tool-def-desc">${esc(prompt)}</div></div></details>`
-    : "";
   return `<div class="call-card">
   <div class="call-header">
     <span class="call-seq">Call ${turn.seq}</span>
@@ -263,7 +352,7 @@ export function callCard(turn: Turn, totalCost: number, prompt: string, tools: T
     <div class="token-row">${esc(tokenRow)}</div>
     ${thought}${toolBlocks}
     ${availableToolsSection(tools)}
-    ${promptSection}
+    ${messagesSection(turn, prompt)}
   </div>
 </div>`;
 }

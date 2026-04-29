@@ -243,6 +243,7 @@ async function runConnector(connector: string, months: number): Promise<void> {
   await writeSelectionMd(connector, symptoms, totalTickets, months);
 
   // Write trace
+  await tracer.loadBodies();
   const htmlPath = await tracer.writeReport(connectorDir);
   console.log(`  [${connector}] trace → ${htmlPath}`);
 }

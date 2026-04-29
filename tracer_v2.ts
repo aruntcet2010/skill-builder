@@ -9,7 +9,8 @@ import fs from "fs/promises";
 import path from "path";
 import {
   calcCost, CSS, JS, esc, fmtDuration, costBar,
-  costBreakdown, callCard, availableToolsSection,
+  costBreakdown, callCard,
+  extractSystemPrompt, extractToolDefs, buildMessages,
   type Turn, type ToolDef, type ToolUse,
 } from "./tracer_shared.js";
 
@@ -122,6 +123,81 @@ export class OrchestratorTracer {
         });
       }
       yield msg;
+    }
+  }
+
+  async loadBodies(): Promise<void> {
+    const bodiesDir = `/tmp/otel_bodies_${this.runId}`;
+    let files: string[];
+    try {
+      files = await fs.readdir(bodiesDir);
+    } catch {
+      return;
+    }
+
+    const stat = async (f: string) => (await fs.stat(path.join(bodiesDir, f))).mtimeMs;
+
+    const reqFiles = (await Promise.all(
+      files.filter(f => f.endsWith(".request.json"))
+           .map(async f => ({ f, t: await stat(f) }))
+    )).sort((a, b) => a.t - b.t).map(x => x.f);
+
+    const resFiles = (await Promise.all(
+      files.filter(f => f.endsWith(".response.json"))
+           .map(async f => ({ f, t: await stat(f) }))
+    )).sort((a, b) => a.t - b.t).map(x => x.f);
+
+    type Pair = { req: Record<string, unknown>; res: Record<string, unknown> };
+    const pairs: Pair[] = [];
+    for (let i = 0; i < Math.min(reqFiles.length, resFiles.length); i++) {
+      try {
+        const req = JSON.parse(await fs.readFile(path.join(bodiesDir, reqFiles[i]), "utf8"));
+        const res = JSON.parse(await fs.readFile(path.join(bodiesDir, resFiles[i]), "utf8"));
+        pairs.push({ req, res });
+      } catch { /* skip malformed */ }
+    }
+    if (!pairs.length) return;
+
+    // Build fingerprint → ordered queue of turns across all agent runs.
+    // Multiple agents can run in parallel so body files are interleaved by mtime;
+    // fingerprint matching handles this as long as token counts are unique per call.
+    const turnQueue = new Map<string, Turn[]>();
+    const runByTurn = new Map<Turn, AgentRun>();
+    const enrichedRuns = new Set<AgentRun>();
+
+    for (const run of this.agentRuns) {
+      for (const turn of run.turns) {
+        const fp = `${turn.inputTokens}:${turn.cacheReadTokens}:${turn.cacheCreationTokens}`;
+        if (!turnQueue.has(fp)) turnQueue.set(fp, []);
+        turnQueue.get(fp)!.push(turn);
+        runByTurn.set(turn, run);
+      }
+    }
+
+    for (const { req, res } of pairs) {
+      const u = (res as any).usage ?? {};
+      const inTokens: number = u.input_tokens ?? 0;
+      const cacheRead: number = u.cache_read_input_tokens ?? 0;
+      const cacheCreate: number = u.cache_creation_input_tokens ?? 0;
+      const realOut: number = u.output_tokens ?? 0;
+
+      const fp = `${inTokens}:${cacheRead}:${cacheCreate}`;
+      const queue = turnQueue.get(fp);
+      if (!queue?.length) continue;
+
+      const turn = queue.shift()!;
+      turn.outputTokens = realOut;
+      turn.costUsd = calcCost(turn.model, inTokens, realOut, cacheRead, cacheCreate);
+      turn.systemPrompt = extractSystemPrompt(req);
+      turn.messages = buildMessages(req);
+
+      // Enrich the agent run's tools with the real API tool schemas (full descriptions + input_schema)
+      const run = runByTurn.get(turn)!;
+      if (!enrichedRuns.has(run)) {
+        const realTools = extractToolDefs(req, run.tools);
+        if (realTools.length) run.tools = realTools;
+        enrichedRuns.add(run);
+      }
     }
   }
 
