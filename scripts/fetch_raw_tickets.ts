@@ -173,8 +173,6 @@ function parseComments(ticket: Record<string, unknown>): Record<string, unknown>
 }
 
 function renderComment(i: number, comment: Record<string, unknown>): string[] {
-  // Skip Zendesk internal events that have no readable body (raw HTML with no text content)
-  if (!cleanText(String(comment["body_text"] ?? ""))) return [];
   const lines: string[] = [`#### Comment ${i}`];
   const blocks: string[][] = [];
   for (const [key, val] of Object.entries(comment)) {
@@ -247,10 +245,8 @@ function writeTicketMarkdown(
   // Measure content size before inserting size fields
   if (showDescription) lines.push("", "## Description", "", description);
   lines.push("", "## Comments", "");
-  let commentNum = 0;
-  for (const comment of comments) {
-    const rendered = renderComment(commentNum + 1, comment as Record<string, unknown>);
-    if (rendered.length) { commentNum++; lines.push(...rendered); }
+  for (let i = 0; i < comments.length; i++) {
+    lines.push(...renderComment(i + 1, comments[i] as Record<string, unknown>));
   }
 
   const content = lines.join("\n");
