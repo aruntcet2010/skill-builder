@@ -1,5 +1,5 @@
 import { query, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { OrchestratorTracer } from "../skill_builder_v2/tracer.js";
+import type { OrchestratorTracer } from "../commons/tracer.js";
 import type { ToolDef } from "../commons/tracer_commons.js";
 import type { Symptom } from "./types.js";
 

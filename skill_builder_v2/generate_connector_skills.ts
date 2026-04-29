@@ -17,7 +17,7 @@ import { runBatchAnalyzer } from "../agents/batch_analyzer.js";
 import { runConsolidator } from "../agents/consolidator.js";
 import { runIssueWriter } from "../agents/issue_writer.js";
 import type { Symptom } from "../agents/types.js";
-import { OrchestratorTracer } from "./tracer.js";
+import { OrchestratorTracer } from "../commons/tracer.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RUN_ID = randomUUID();
@@ -212,7 +212,7 @@ async function runConnector(connector: string, months: number): Promise<void> {
   console.log("=".repeat(60));
 
   const connectorDir = path.join(SKILL_DIR, connector);
-  const tracer = new OrchestratorTracer(connector, months, RUN_ID, connectorDir);
+  const tracer = new OrchestratorTracer(`${connector} · ${months}mo`, RUN_ID, connectorDir);
   console.log(`  [${connector}] trace → ${path.join(connectorDir, "trace.html")} (updates as agents complete)`);
 
   // Step 1

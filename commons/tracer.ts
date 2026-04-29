@@ -1,7 +1,8 @@
 /**
- * Tracer for the v2 TypeScript orchestrator.
- * Captures multiple named agent runs (batch_analyzer, consolidator, issue_writer)
- * and renders them as a single HTML trace with a chronological call stack.
+ * Generic multi-agent orchestrator tracer.
+ * Works with any set of agent types — pass any string as the agent type.
+ * Captures turns, loads OTEL body files for full message history, and
+ * renders a cost-ledger-style HTML report.
  */
 
 import type { SDKMessage, SDKAssistantMessage, SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -12,15 +13,13 @@ import {
   costBreakdown, callCard,
   extractSystemPrompt, extractToolDefs, buildMessages,
   type Turn, type ToolDef, type ToolUse,
-} from "../commons/tracer_commons.js";
+} from "./tracer_commons.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export type AgentType = "batch_analyzer" | "consolidator" | "issue_writer";
-
 export interface AgentRun {
   name: string;
-  type: AgentType;
+  type: string;
   prompt: string;
   tools: ToolDef[];
   turns: Turn[];
@@ -30,8 +29,7 @@ export interface AgentRun {
 }
 
 export interface OrchestratorTrace {
-  connector: string;
-  months: number;
+  runLabel: string;  // human-readable label shown in the trace header
   runId: string;
   startedAt: string;
   agentRuns: AgentRun[];
@@ -46,15 +44,14 @@ export class OrchestratorTracer {
   private startMs = Date.now();
 
   constructor(
-    private readonly connector: string,
-    private readonly months: number,
+    private readonly runLabel: string,
     private readonly runId: string,
-    private readonly liveDir?: string,  // if set, writes trace.html after each agent run completes
+    private readonly liveDir?: string,
   ) {}
 
   async *capture(
     name: string,
-    type: AgentType,
+    type: string,
     prompt: string,
     tools: ToolDef[],
     source: AsyncIterable<SDKMessage>,
@@ -83,7 +80,7 @@ export class OrchestratorTracer {
           }
         }
 
-        // Merge messages from the same LLM call (SDK can emit multiple assistant messages per call)
+        // One LLM API call can emit multiple SDKAssistantMessages — merge by token fingerprint
         const prev = turns[turns.length - 1];
         const sameCall = prev &&
           prev.inputTokens === inputTokens &&
@@ -97,14 +94,8 @@ export class OrchestratorTracer {
         } else {
           seq++;
           turns.push({
-            seq,
-            model,
-            text: text.trim(),
-            toolUses,
-            inputTokens,
-            outputTokens,
-            cacheReadTokens,
-            cacheCreationTokens,
+            seq, model, text: text.trim(), toolUses,
+            inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens,
             costUsd: calcCost(model, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens),
             stopReason: m.stop_reason ?? "",
             elapsedMs: Date.now() - startMs,
@@ -113,11 +104,7 @@ export class OrchestratorTracer {
       } else if (msg.type === "result") {
         const r = msg as SDKResultMessage;
         this.agentRuns.push({
-          name,
-          type,
-          prompt,
-          tools,
-          turns,
+          name, type, prompt, tools, turns,
           startedAt: new Date(startMs).toISOString(),
           totalCostUsd: r.total_cost_usd ?? turns.reduce((s, t) => s + t.costUsd, 0),
           totalDurationMs: Date.now() - startMs,
@@ -160,9 +147,6 @@ export class OrchestratorTracer {
     }
     if (!pairs.length) return;
 
-    // Build fingerprint → ordered queue of turns across all agent runs.
-    // Multiple agents can run in parallel so body files are interleaved by mtime;
-    // fingerprint matching handles this as long as token counts are unique per call.
     const turnQueue = new Map<string, Turn[]>();
     const runByTurn = new Map<Turn, AgentRun>();
     const enrichedRuns = new Set<AgentRun>();
@@ -193,7 +177,6 @@ export class OrchestratorTracer {
       turn.systemPrompt = extractSystemPrompt(req);
       turn.messages = buildMessages(req);
 
-      // Enrich the agent run's tools with the real API tool schemas (full descriptions + input_schema)
       const run = runByTurn.get(turn)!;
       if (!enrichedRuns.has(run)) {
         const realTools = extractToolDefs(req, run.tools);
@@ -205,8 +188,7 @@ export class OrchestratorTracer {
 
   private buildTrace(): OrchestratorTrace {
     return {
-      connector: this.connector,
-      months: this.months,
+      runLabel: this.runLabel,
       runId: this.runId,
       startedAt: new Date(this.startMs).toISOString(),
       agentRuns: this.agentRuns,
@@ -231,23 +213,34 @@ export class OrchestratorTracer {
 
 // ── HTML ──────────────────────────────────────────────────────────────────────
 
-const TYPE_COLORS: Record<AgentType, string> = {
-  batch_analyzer: "var(--accent)",
-  consolidator:   "var(--amber)",
-  issue_writer:   "var(--green)",
-};
+// Assign a stable color to each agent type based on order of first appearance
+const COLOR_PALETTE = [
+  "var(--accent)",
+  "var(--amber)",
+  "var(--green)",
+  "var(--red)",
+  "#a78bfa",
+  "#fb7185",
+];
+
+function typeColor(type: string, orderedTypes: string[]): string {
+  const idx = orderedTypes.indexOf(type);
+  return COLOR_PALETTE[idx % COLOR_PALETTE.length] ?? "var(--accent)";
+}
 
 function summaryTable(trace: OrchestratorTrace): string {
   const total = trace.totalCostUsd || 0.0001;
   const totalCalls = trace.agentRuns.reduce((s, r) => s + r.turns.length, 0);
 
-  const groups: AgentType[] = ["batch_analyzer", "consolidator", "issue_writer"];
-  const rows = groups.flatMap(type => {
+  // Group by type, preserving order of first appearance
+  const orderedTypes = [...new Set(trace.agentRuns.map(r => r.type))];
+
+  const rows = orderedTypes.flatMap(type => {
     const runs = trace.agentRuns.filter(r => r.type === type);
-    if (!runs.length) return [];
     const groupLabel = type.replace(/_/g, " ");
-    const header = `<tr class="group-header"><td colspan="4">${groupLabel}</td></tr>`;
-    const runRows = runs.map((r, i) => {
+    const color = typeColor(type, orderedTypes);
+    const header = `<tr class="group-header"><td colspan="4" style="color:${color}">${groupLabel}</td></tr>`;
+    const runRows = runs.map(r => {
       const anchor = `run-${trace.agentRuns.indexOf(r)}`;
       return `<tr data-anchor="${anchor}">
         <td style="padding-left:24px">${esc(r.name)}</td>
@@ -276,12 +269,13 @@ function summaryTable(trace: OrchestratorTrace): string {
 
 function buildHtml(trace: OrchestratorTrace): string {
   const ts = new Date(trace.startedAt).toLocaleString();
+  const orderedTypes = [...new Set(trace.agentRuns.map(r => r.type))];
 
   const detailSections = trace.agentRuns.map((run, i) => {
     const runCost = run.totalCostUsd;
     const model = run.turns[0]?.model ?? "claude-sonnet-4-6";
     const n = run.turns.length;
-    const color = TYPE_COLORS[run.type] ?? "var(--accent)";
+    const color = typeColor(run.type, orderedTypes);
     const meta = `${n} call${n !== 1 ? "s" : ""} · ${esc(model)} · $${runCost.toFixed(4)} · ${fmtDuration(run.totalDurationMs)}`;
     const cards = run.turns.map((t, j) => callCard(t, runCost, run.prompt, j === 0 ? run.tools : [])).join("");
     return `<div class="context-section" id="run-${i}">
@@ -296,12 +290,12 @@ function buildHtml(trace: OrchestratorTrace): string {
   return `<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Trace v2 — ${esc(trace.connector)} — ${esc(trace.runId)}</title>
+<title>Trace — ${esc(trace.runLabel)} — ${esc(trace.runId)}</title>
 <style>${CSS}</style>
 </head><body>
 <header>
   <h1>Trace</h1>
-  <span class="run-meta">${esc(trace.connector)} · ${esc(trace.months)}mo</span>
+  <span class="run-meta">${esc(trace.runLabel)}</span>
   <span class="run-meta">${esc(trace.runId.slice(0, 8))}</span>
   <span class="run-meta">${esc(ts)}</span>
   <span class="run-meta">$${trace.totalCostUsd.toFixed(4)} · ${fmtDuration(trace.totalDurationMs)}</span>
