@@ -64,7 +64,7 @@ function fetchTickets(connector: string, months: number): Promise<void> {
 // ---------------------------------------------------------------------------
 // Step 2: read metadata, return batches of ticket paths
 // ---------------------------------------------------------------------------
-async function readAndBatch(connector: string, batchSize = 5): Promise<string[][]> {
+async function readAndBatch(connector: string, batchSize = 50): Promise<string[][]> {
   const metadata = await fs.readFile(`/tmp/${connector}_tickets/metadata.md`, "utf8");
   const filenames: string[] = [];
   for (const line of metadata.split("\n")) {

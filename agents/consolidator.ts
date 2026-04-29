@@ -19,10 +19,11 @@ ${batchFilePaths.join("\n")}
 
 Then:
 1. Deduplicate: if two entries describe the same customer-visible symptom (even if worded differently), merge them — combine ticket_ids, keep highest severity, write a unified description
-2. Sort by total ticket_ids count descending (most frequent symptom first)
-3. Take the top 20 symptoms
-4. Assign each a unique slug: 3-4 word kebab-case describing the customer symptom (e.g. "binlog-not-syncing", "oauth-token-expired", "pipeline-stuck-ingesting")
-5. Extract 3-5 keywords per symptom: actual error messages or phrases a customer would search for (from the descriptions)
+2. Drop any symptom with fewer than 3 ticket_ids after merging
+3. Sort by total ticket_ids count descending (most frequent symptom first)
+4. Take the top 20 symptoms
+5. Assign each a unique slug: 3-4 word kebab-case describing the customer symptom (e.g. "binlog-not-syncing", "oauth-token-expired", "pipeline-stuck-ingesting")
+6. Extract 3-5 keywords per symptom: actual error messages or phrases a customer would search for (from the descriptions)
 
 Write the final JSON array to: ${outputPath}
 
