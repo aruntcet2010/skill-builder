@@ -1,11 +1,8 @@
-import { query, type SDKMessage, type SDKAssistantMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { OrchestratorTracer } from "../orchestrated_skills/tracer.js";
-import type { ToolDef } from "../commons/tracer_commons.js";
+import { query, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
+import fs from "fs/promises";
 import type { SymptomSummary } from "./types.js";
 
-const TOOLS: ToolDef[] = [{ name: "Read", type: "builtin", description: "Read file contents" }];
-
-function buildPrompt(ticketPaths: string[]): string {
+function buildPrompt(ticketPaths: string[], outputPath: string): string {
   return `You are a support ticket analyst.
 
 Read each of the following ticket files using the Read tool, then identify every distinct customer-visible symptom across all the tickets.
@@ -19,51 +16,44 @@ For each distinct symptom group return a JSON object with these fields:
 - description: one sentence describing what the customer sees (based only on ticket content)
 - ticket_ids: string array of ALL ticket IDs in this symptom group
 
+Write the final JSON array to: ${outputPath}
+
 Rules:
 - Read ALL files before extracting symptoms
 - Group by customer-visible symptom — same symptom, different root cause = same group
 - One ticket can only belong to one symptom group (pick the best match)
-- Return ONLY a valid JSON array — no markdown, no explanation, no code fences
+- Write ONLY a valid JSON array to the file — no markdown, no explanation, no code fences
 - If a ticket has no useful signal (e.g. spam, test ticket), skip it`;
 }
 
 export async function runBatchAnalyzer(
   ticketPaths: string[],
+  outputPath: string,
   env: Record<string, string>,
-  tracer?: OrchestratorTracer,
-  runName = "batch_analyzer",
 ): Promise<SymptomSummary[]> {
-  const prompt = buildPrompt(ticketPaths);
-  let output = "";
+  const prompt = buildPrompt(ticketPaths, outputPath);
 
   const rawStream = query({
     prompt,
     options: {
       model: "claude-sonnet-4-6",
-      allowedTools: ["Read"],
-      permissionMode: "acceptEdits",
-      settingSources: ["user"],
+      tools: ["Read", "Write"],
+      permissionMode: "bypassPermissions",
+      settingSources: [],
+      mcpServers: {},
+      strictMcpConfig: true,
       maxTurns: 20,
       env,
     },
   });
 
-  const stream = tracer ? tracer.capture(runName, "batch_analyzer", prompt, TOOLS, rawStream) : rawStream;
-
-  for await (const message of stream) {
+  for await (const message of rawStream) {
     const msg = message as SDKMessage;
-    if (msg.type === "assistant") {
-      for (const block of (msg as SDKAssistantMessage).message.content) {
-        if (block.type === "text") output += block.text;
-      }
-    } else if (msg.type === "result") {
-      if ((msg as SDKResultMessage).is_error) {
-        throw new Error(`batch_analyzer failed: ${output.slice(0, 200)}`);
-      }
+    if (msg.type === "result" && (msg as SDKResultMessage).is_error) {
+      throw new Error(`batch_analyzer failed for ${outputPath}`);
     }
   }
 
-  const match = output.match(/\[[\s\S]*\]/);
-  if (!match) throw new Error(`batch_analyzer returned no JSON:\n${output.slice(0, 300)}`);
-  return JSON.parse(match[0]) as SymptomSummary[];
+  const content = await fs.readFile(outputPath, "utf8");
+  return JSON.parse(content) as SymptomSummary[];
 }

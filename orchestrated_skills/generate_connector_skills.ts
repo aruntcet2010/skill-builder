@@ -36,11 +36,6 @@ const ALL_CONNECTORS = [
   "postgresql",
 ];
 
-const otelEnv: Record<string, string> = {
-  CLAUDE_CODE_ENABLE_TELEMETRY: "1",
-  OTEL_LOG_RAW_API_BODIES: `file:/tmp/otel_bodies_${RUN_ID}`,
-  ...process.env as Record<string, string>,
-};
 
 // ---------------------------------------------------------------------------
 // Step 1: fetch tickets from Snowflake
@@ -68,7 +63,7 @@ async function readAndBatch(connector: string, batchSize = 50): Promise<string[]
   const metadata = await fs.readFile(`/tmp/${connector}_tickets/metadata.md`, "utf8");
   const filenames: string[] = [];
   for (const line of metadata.split("\n")) {
-    const match = line.match(/\|\s*\[(\S+\.md)\]/);
+    const match = line.match(/\|\s*\[[^\]]*\]\((\S+\.md)\)/);
     if (match) filenames.push(match[1]);
   }
   const base = `/tmp/${connector}_tickets`;
@@ -88,9 +83,9 @@ async function analyzeBatches(connector: string, batches: string[][], tracer: Or
   console.log(`  [${connector}] running ${batches.length} batch analyzers in parallel...`);
   const batchFilePaths = await Promise.all(
     batches.map(async (batch, i) => {
-      const symptoms = await runBatchAnalyzer(batch, otelEnv, tracer, `batch_analyzer[${i}]`);
       const filePath = `/tmp/${connector}_batch_${i}.json`;
-      await fs.writeFile(filePath, JSON.stringify(symptoms, null, 2), "utf8");
+      const env = tracer.getAgentEnv(`batch_analyzer[${i}]`, "batch_analyzer");
+      const symptoms = await runBatchAnalyzer(batch, filePath, env);
       console.log(`  [${connector}] batch ${i} done — ${symptoms.length} symptoms`);
       return filePath;
     })
@@ -104,7 +99,8 @@ async function analyzeBatches(connector: string, batches: string[][], tracer: Or
 async function consolidate(connector: string, batchFilePaths: string[], tracer: OrchestratorTracer): Promise<Symptom[]> {
   console.log(`  [${connector}] consolidating ${batchFilePaths.length} batch files...`);
   const outputPath = `/tmp/${connector}_symptoms.json`;
-  const symptoms = await runConsolidator(connector, batchFilePaths, outputPath, otelEnv, tracer);
+  const env = tracer.getAgentEnv("consolidator", "consolidator");
+  const symptoms = await runConsolidator(connector, batchFilePaths, outputPath, env);
   console.log(`  [${connector}] consolidated → ${symptoms.length} distinct symptoms`);
   return symptoms;
 }
@@ -123,7 +119,8 @@ async function writeIssueFiles(connector: string, symptoms: Symptom[], tracer: O
         id => `/tmp/${connector}_tickets/ticket_${id}.md`
       );
       const outputPath = path.join(connectorDir, `${symptom.slug}.md`);
-      await runIssueWriter(symptom, ticketPaths, outputPath, otelEnv, tracer);
+      const env = tracer.getAgentEnv(`issue_writer[${symptom.slug}]`, "issue_writer");
+      await runIssueWriter(symptom, ticketPaths, outputPath, env);
       console.log(`  [${connector}] wrote ${symptom.slug}.md`);
     })
   );
@@ -212,8 +209,8 @@ async function runConnector(connector: string, months: number): Promise<void> {
   console.log("=".repeat(60));
 
   const connectorDir = path.join(SKILL_DIR, connector);
-  const tracer = new OrchestratorTracer(`${connector} · ${months}mo`, RUN_ID, connectorDir);
-  console.log(`  [${connector}] trace → ${path.join(connectorDir, "trace.html")} (updates as agents complete)`);
+  const tracer = new OrchestratorTracer(`${connector} · ${months}mo`, RUN_ID);
+  console.log(`  [${connector}] OTLP receiver on port ${tracer.port}`);
 
   // Step 1
   await fetchTickets(connector, months);
@@ -243,8 +240,6 @@ async function runConnector(connector: string, months: number): Promise<void> {
   const totalTickets = batches.flat().length;
   await writeSelectionMd(connector, symptoms, totalTickets, months);
 
-  // Write trace
-  await tracer.loadBodies();
   await tracer.writeReport(connectorDir);
 }
 

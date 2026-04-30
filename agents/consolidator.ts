@@ -1,13 +1,6 @@
 import { query, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import fs from "fs/promises";
-import type { OrchestratorTracer } from "../orchestrated_skills/tracer.js";
-import type { ToolDef } from "../commons/tracer_commons.js";
 import type { Symptom } from "./types.js";
-
-const TOOLS: ToolDef[] = [
-  { name: "Read",  type: "builtin", description: "Read file contents" },
-  { name: "Write", type: "builtin", description: "Write file contents" },
-];
 
 function buildPrompt(connector: string, batchFilePaths: string[], outputPath: string): string {
   return `You are a support ticket analyst consolidating symptom data for the "${connector}" connector.
@@ -43,7 +36,6 @@ export async function runConsolidator(
   batchFilePaths: string[],
   outputPath: string,
   env: Record<string, string>,
-  tracer?: OrchestratorTracer,
 ): Promise<Symptom[]> {
   const prompt = buildPrompt(connector, batchFilePaths, outputPath);
 
@@ -51,17 +43,17 @@ export async function runConsolidator(
     prompt,
     options: {
       model: "claude-sonnet-4-6",
-      allowedTools: ["Read", "Write"],
-      permissionMode: "acceptEdits",
-      settingSources: ["user"],
+      tools: ["Read", "Write"],
+      permissionMode: "bypassPermissions",
+      settingSources: [],
+      mcpServers: {},
+      strictMcpConfig: true,
       maxTurns: 30,
       env,
     },
   });
 
-  const stream = tracer ? tracer.capture("consolidator", "consolidator", prompt, TOOLS, rawStream) : rawStream;
-
-  for await (const message of stream) {
+  for await (const message of rawStream) {
     const msg = message as SDKMessage;
     if (msg.type === "result" && (msg as SDKResultMessage).is_error) {
       throw new Error(`consolidator failed for ${connector}`);

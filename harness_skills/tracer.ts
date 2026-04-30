@@ -150,10 +150,12 @@ export class RunTracer {
 
     for (const { req, res } of pairs) {
       const u = (res as any).usage ?? {};
-      const inTokens: number = u.input_tokens ?? 0;
+      const rawIn: number = u.input_tokens ?? 0;
       const cacheRead: number = u.cache_read_input_tokens ?? 0;
       const cacheCreate: number = u.cache_creation_input_tokens ?? 0;
       const realOut: number = u.output_tokens ?? 0;
+      // OTEL reports only uncached input tokens; SDK reports total (uncached + cached).
+      const inTokens = rawIn + cacheRead + cacheCreate;
 
       const fp = `${inTokens}:${cacheRead}:${cacheCreate}`;
       const turn = turnByFp.get(fp);
