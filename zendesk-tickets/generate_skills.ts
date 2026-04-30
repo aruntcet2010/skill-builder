@@ -3,9 +3,9 @@
  * Pure TypeScript orchestrator — all LLM work delegated to focused agents.
  *
  * Usage:
- *   npx tsx generate_connector_skills.ts                          # all connectors
- *   npx tsx generate_connector_skills.ts --connector hubspot      # one connector
- *   npx tsx generate_connector_skills.ts --months 3               # last 3 months
+ *   npx tsx zendesk-tickets/generate_skills.ts                          # all connectors
+ *   npx tsx zendesk-tickets/generate_skills.ts --connector hubspot      # one connector
+ *   npx tsx zendesk-tickets/generate_skills.ts --months 3               # last 3 months
  */
 
 import path from "path";
@@ -17,7 +17,7 @@ import { runBatchAnalyzer } from "../agents/batch_analyzer.js";
 import { runConsolidator } from "../agents/consolidator.js";
 import { runIssueWriter } from "../agents/issue_writer.js";
 import type { Symptom } from "../agents/types.js";
-import { OrchestratorTracer } from "./tracer.js";
+import { OrchestratorTracer } from "../lib/tracer.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RUN_ID = randomUUID();
