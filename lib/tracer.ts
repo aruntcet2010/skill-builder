@@ -98,6 +98,8 @@ export class OrchestratorTracer {
   readonly port: number;
   private readonly bodiesDir: string;
   private readonly startMs = Date.now();
+  private liveInterval: ReturnType<typeof setInterval> | null = null;
+  private liveHtmlPath: string | null = null;
 
   constructor(
     private readonly runLabel: string,
@@ -281,15 +283,31 @@ export class OrchestratorTracer {
     return [...runs.values()].filter(r => r.turns.length > 0);
   }
 
+  /** Start writing the HTML every intervalMs so it can be refreshed during the run. */
+  startLiveReport(htmlPath: string, intervalMs = 3000): void {
+    this.liveHtmlPath = htmlPath;
+    this.liveInterval = setInterval(async () => {
+      try {
+        const runs = await this.buildAgentRuns();
+        await fs.mkdir(path.dirname(htmlPath), { recursive: true });
+        await fs.writeFile(htmlPath, buildHtml(runs, this.runLabel, this.runId, Date.now() - this.startMs, true), "utf8");
+      } catch { /* ignore mid-run errors */ }
+    }, intervalMs);
+  }
+
   async writeReport(outputDir: string): Promise<string> {
+    if (this.liveInterval) {
+      clearInterval(this.liveInterval);
+      this.liveInterval = null;
+    }
     // Wait for OTEL exporters to flush (interval=2s, wait 5s)
     await new Promise(r => setTimeout(r, 5000));
     await new Promise<void>(resolve => this.server.close(() => resolve()));
 
     const runs = await this.buildAgentRuns();
     await fs.mkdir(outputDir, { recursive: true });
-    const htmlPath = path.join(outputDir, "trace.html");
-    await fs.writeFile(htmlPath, buildHtml(runs, this.runLabel, this.runId, Date.now() - this.startMs), "utf8");
+    const htmlPath = this.liveHtmlPath ?? path.join(outputDir, "trace.html");
+    await fs.writeFile(htmlPath, buildHtml(runs, this.runLabel, this.runId, Date.now() - this.startMs, false), "utf8");
     console.log(`  trace → ${htmlPath}`);
     return htmlPath;
   }
@@ -405,7 +423,7 @@ function turnCard(t: Turn, runCost: number, seq: number): string {
 </div>`;
 }
 
-function buildHtml(runs: AgentRun[], runLabel: string, runId: string, totalMs: number): string {
+function buildHtml(runs: AgentRun[], runLabel: string, runId: string, totalMs: number, live = false): string {
   const totalCost = runs.reduce((s, r) => s + r.turns.reduce((ss, t) => ss + t.costUsd, 0), 0);
   const orderedTypes = [...new Set(runs.map(r => r.type))];
 
@@ -515,6 +533,8 @@ sub-details{margin-top:10px}
 .msg{margin-bottom:10px}
 .msg-role{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px}
 .msg-content{font-family:var(--mono);font-size:11px;white-space:pre-wrap;word-break:break-all;background:var(--surface2);padding:6px 8px;border-radius:var(--radius);max-height:200px;overflow:auto}
+.live-badge{margin-left:auto;font-size:11px;color:#22c55e;font-family:var(--mono);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 </style>
 </head><body>
 <header>
@@ -523,6 +543,7 @@ sub-details{margin-top:10px}
   <span class="meta">${esc(runId.slice(0, 8))}</span>
   <span class="meta">${esc(ts)}</span>
   <span class="meta">$${totalCost.toFixed(4)} · ${fmtMs(totalMs)}</span>
+  ${live ? `<span class="live-badge">● LIVE — updated ${esc(ts)}</span>` : ""}
 </header>
 <main>
   <div class="section"><h2>Summary</h2>${summaryTable}</div>

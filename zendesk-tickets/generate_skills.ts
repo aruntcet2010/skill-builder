@@ -210,7 +210,10 @@ async function runConnector(connector: string, months: number): Promise<void> {
 
   const connectorDir = path.join(SKILL_DIR, connector);
   const tracer = new OrchestratorTracer(`${connector} · ${months}mo`, RUN_ID);
+  const liveHtmlPath = path.join(connectorDir, "trace.html");
+  tracer.startLiveReport(liveHtmlPath);
   console.log(`  [${connector}] OTLP receiver on port ${tracer.port}`);
+  console.log(`  [${connector}] live trace → ${liveHtmlPath}`);
 
   // Step 1
   await fetchTickets(connector, months);
