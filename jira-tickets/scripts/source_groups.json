@@ -1,0 +1,358 @@
+{
+  "MYSQL": [
+    "MYSQL", "AWS_RDS_MYSQL", "AURORA", "GCP_MYSQL", "AZURE_MYSQL", "AURORA_MYSQL",
+    "ORACLE_MYSQL", "TOKU_DB_MYSQL", "WOOCOMMERCE_VIA_MYSQL", "WORDPRESS_VIA_MYSQL",
+    "MAGENTO_VIA_MYSQL", "PRESTASHOP_VIA_MYSQL"
+  ],
+  "MARIA_DB": [
+    "MARIA_DB", "AWS_RDS_MARIA_DB", "AZURE_MARIA_DB"
+  ],
+  "POSTGRES": [
+    "POSTGRES", "AWS_RDS_POSTGRES", "AWS_AURORA_POSTGRES",
+    "GCP_POSTGRES", "AZURE_POSTGRES", "SF_HEROKU_POSTGRES"
+  ],
+  "ORACLE": [
+    "ORACLE", "AWS_RDS_ORACLE"
+  ],
+  "MSSQL": [
+    "SQLSERVER", "AWS_RDS_SQLSERVER", "GCP_SQLSERVER", "AZURE_MSSQL",
+    "MS_SQL", "AWS_RDS_MSSQL", "GCP_MS_SQL", "AZURE_SQL"
+  ],
+  "MONGODB": [
+    "MONGODB", "ATLAS_MONGODB", "AWS_DOCUMENT_DB"
+  ],
+  "DYNAMODB": [
+    "DYNAMODB"
+  ],
+  "ELASTICSEARCH": [
+    "ELASTICSEARCH", "AWS_ELASTICSEARCH", "AWS_OPENSEARCH"
+  ],
+  "REDSHIFT": [
+    "REDSHIFT"
+  ],
+  "BIGQUERY": [
+    "BIGQUERY"
+  ],
+  "KAFKA": [
+    "KAFKA", "CONFLUENT_CLOUD"
+  ],
+  "SALESFORCE": [
+    "SALESFORCE", "SALESFORCE_V2", "SALESFORCE_MARKETING_CLOUD"
+  ],
+  "PARDOT": [
+    "PARDOT"
+  ],
+  "GOOGLE_ANALYTICS": [
+    "GOOGLE_ANALYTICS", "GOOGLE_ANALYTICS_V2", "GOOGLE_ANALYTICS_360", "GOOGLE_ANALYTICS_4"
+  ],
+  "GOOGLE_ADS": [
+    "GOOGLE_ADS", "GOOGLE_ADWORDS"
+  ],
+  "GOOGLE_WORKSPACE": [
+    "GOOGLE_SHEETS", "GOOGLE_SEARCH_CONSOLE", "GOOGLE_PLAY_CONSOLE",
+    "GOOGLE_CM", "FIREBASE_ANALYTICS"
+  ],
+  "YOUTUBE": [
+    "YOUTUBE_ANALYTICS", "YOUTUBE_DATA"
+  ],
+  "FACEBOOK": [
+    "FACEBOOK_ADS", "FACEBOOK_PAGES"
+  ],
+  "INSTAGRAM_BUSINESS": [
+    "INSTAGRAM_BUSINESS"
+  ],
+  "TIKTOK_ADS": [
+    "TIKTOK_ADS"
+  ],
+  "SNAPCHAT_ADS": [
+    "SNAPCHAT_ADS"
+  ],
+  "AMAZON_ADS": [
+    "AMAZON_ADS"
+  ],
+  "MICROSOFT_ADS": [
+    "MICROSOFT_ADS"
+  ],
+  "TWITTER_ADS": [
+    "TWITTER_ADS"
+  ],
+  "LINKEDIN_ADS": [
+    "LINKEDIN_ADS"
+  ],
+  "PINTEREST_ADS": [
+    "PINTEREST_ADS"
+  ],
+  "APPLE_SEARCH_ADS": [
+    "APPLE_SEARCH_ADS"
+  ],
+  "ADROLL": [
+    "ADROLL"
+  ],
+  "CRITEO": [
+    "CRITEO"
+  ],
+  "TABOOLA": [
+    "TABOOLA"
+  ],
+  "OUTBRAIN": [
+    "OUTBRAIN"
+  ],
+  "ZENDESK": [
+    "ZENDESK", "ZENDESK_SELL"
+  ],
+  "FRESHWORKS": [
+    "FRESHDESK", "FRESH_SERVICE", "FRESH_SALES", "FRESHSERVICE"
+  ],
+  "HUBSPOT": [
+    "HUBSPOT"
+  ],
+  "PIPEDRIVE": [
+    "PIPEDRIVE"
+  ],
+  "ZOHO_CRM": [
+    "ZOHO_CRM"
+  ],
+  "CLOSE": [
+    "CLOSE"
+  ],
+  "STREAK": [
+    "STREAK"
+  ],
+  "OUTREACH": [
+    "OUTREACH"
+  ],
+  "SALESLOFT": [
+    "SALESLOFT"
+  ],
+  "KEAP": [
+    "KEAP"
+  ],
+  "ACTIVE_CAMPAIGN": [
+    "ACTIVE_CAMPAIGN"
+  ],
+  "MARKETO": [
+    "MARKETO"
+  ],
+  "MAILCHIMP": [
+    "MAILCHIMP", "MAILCHIMP_WEBHOOK"
+  ],
+  "SENDGRID": [
+    "SENDGRID", "SENDGRID_WEBHOOK"
+  ],
+  "BRAZE": [
+    "BRAZE"
+  ],
+  "SENDINBLUE": [
+    "SENDINBLUE"
+  ],
+  "MAILSHAKE": [
+    "MAILSHAKE"
+  ],
+  "LEMLIST": [
+    "LEMLIST"
+  ],
+  "DRIP": [
+    "DRIP"
+  ],
+  "KLAVIYO": [
+    "KLAVIYO", "KLAVIYO_V2"
+  ],
+  "INTERCOM": [
+    "INTERCOM", "INTERCOM_WEBHOOK"
+  ],
+  "SHOPIFY": [
+    "SHOPIFY", "SHOPIFY_WEBHOOK"
+  ],
+  "BIGCOMMERCE": [
+    "BIGCOMMERCE"
+  ],
+  "STRIPE": [
+    "STRIPE"
+  ],
+  "CHARGEBEE": [
+    "CHARGEBEE"
+  ],
+  "BRAINTREE_PAYMENTS": [
+    "BRAINTREE_PAYMENTS"
+  ],
+  "RECHARGE": [
+    "RECHARGE"
+  ],
+  "RECURLY": [
+    "RECURLY", "RECURLY_V2"
+  ],
+  "SWELL": [
+    "SWELL"
+  ],
+  "NETSUITE_ERP": [
+    "NETSUITE_ERP"
+  ],
+  "NETSUITE_ANALYTICS": [
+    "NETSUITE_ANALYTICS"
+  ],
+  "QUICKBOOKS": [
+    "QUICKBOOKS", "QUICKBOOKS_TIME", "QUICKBOOKS_ONLINE"
+  ],
+  "XERO": [
+    "XERO"
+  ],
+  "INVOICED": [
+    "INVOICED"
+  ],
+  "MIXPANEL": [
+    "MIXPANEL"
+  ],
+  "AMPLITUDE_ANALYTICS": [
+    "AMPLITUDE_ANALYTICS"
+  ],
+  "APPSFLYER": [
+    "APPSFLYER"
+  ],
+  "CLEVERTAP": [
+    "CLEVERTAP"
+  ],
+  "SEGMENT": [
+    "SEGMENT"
+  ],
+  "PENDO": [
+    "PENDO"
+  ],
+  "TYPEFORM": [
+    "TYPEFORM", "TYPEFORM_II"
+  ],
+  "SURVEY_MONKEY": [
+    "SURVEY_MONKEY"
+  ],
+  "DELIGHTED": [
+    "DELIGHTED"
+  ],
+  "GITHUB": [
+    "GITHUB"
+  ],
+  "GITLAB": [
+    "GITLAB"
+  ],
+  "BITBUCKET": [
+    "BITBUCKET"
+  ],
+  "BUILDKITE": [
+    "BUILDKITE"
+  ],
+  "JIRA_CLOUD": [
+    "JIRA_CLOUD"
+  ],
+  "ASANA": [
+    "ASANA"
+  ],
+  "TRELLO": [
+    "TRELLO"
+  ],
+  "CLICKUP": [
+    "CLICKUP"
+  ],
+  "WRIKE": [
+    "WRIKE"
+  ],
+  "AIRTABLE": [
+    "AIRTABLE"
+  ],
+  "HIVE": [
+    "HIVE"
+  ],
+  "PRODUCTBOARD": [
+    "PRODUCTBOARD"
+  ],
+  "QUANTIVE": [
+    "QUANTIVE"
+  ],
+  "QUICKBASE": [
+    "QUICKBASE"
+  ],
+  "TOGGL_TRACK": [
+    "TOGGL_TRACK"
+  ],
+  "HARVEST": [
+    "HARVEST"
+  ],
+  "HUB_PLANNER": [
+    "HUB_PLANNER"
+  ],
+  "WORKABLE": [
+    "WORKABLE"
+  ],
+  "VINCERE": [
+    "VINCERE"
+  ],
+  "PAGER_DUTY": [
+    "PAGER_DUTY", "PAGERDUTY"
+  ],
+  "OPSGENIE": [
+    "OPSGENIE"
+  ],
+  "PINGDOM": [
+    "PINGDOM"
+  ],
+  "SENTRY": [
+    "SENTRY"
+  ],
+  "SLACK": [
+    "SLACK"
+  ],
+  "TWILIO": [
+    "TWILIO"
+  ],
+  "APIFY": [
+    "APIFY"
+  ],
+  "CONTENTFUL": [
+    "CONTENTFUL"
+  ],
+  "SHIPSTATION": [
+    "SHIPSTATION"
+  ],
+  "SHIPPO": [
+    "SHIPPO"
+  ],
+  "AFTERSHIP": [
+    "AFTERSHIP"
+  ],
+  "ONFLEET": [
+    "ONFLEET"
+  ],
+  "STAMPED": [
+    "STAMPED"
+  ],
+  "HELPSCOUT": [
+    "HELPSCOUT"
+  ],
+  "DIXA": [
+    "DIXA"
+  ],
+  "USERVOICE": [
+    "USERVOICE"
+  ],
+  "FRONT": [
+    "FRONT"
+  ],
+  "MISSIVE": [
+    "MISSIVE"
+  ],
+  "PANDA_DOC": [
+    "PANDA_DOC"
+  ],
+  "SPARK_POST": [
+    "SPARK_POST"
+  ],
+  "RESTAPI": [
+    "RESTAPI"
+  ],
+  "WEBHOOK": [
+    "WEBHOOK"
+  ],
+  "FILE_STORAGE": [
+    "S3", "AZURE_BLOB", "GCS", "DRIVE", "FTP"
+  ],
+  "SDK": [
+    "ANDROID_SDK", "IOS_SDK", "HEVO_SDK"
+  ]
+}
