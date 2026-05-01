@@ -33,11 +33,12 @@ export async function runBatchBucketizer(
   batchIdx: number,
   totalBatches: number,
   batchFile: string,
+  env: Record<string, string>,
 ): Promise<IssueTypeBucket[]> {
   const prompt = buildPrompt(tickets);
 
   let resultText = "";
-  for await (const msg of query({ prompt })) {
+  for await (const msg of query({ prompt, options: { env } })) {
     if (msg.type === "result" && msg.subtype === "success") {
       resultText = msg.result;
     }

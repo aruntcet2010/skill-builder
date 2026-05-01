@@ -14,10 +14,12 @@ import * as fs from "fs";
 import * as path from "path";
 import { fileURLToPath } from "url";
 import { spawnSync } from "child_process";
+import { randomUUID } from "crypto";
 import { runBatchBucketizer } from "./agents/batch_bucketizer.js";
 import { runMerger } from "./agents/merger.js";
 import { runDeepAnalyzer } from "./agents/deep_analyzer.js";
 import type { FullTicket, IssueTypeBucket } from "./agents/types.js";
+import { OrchestratorTracer } from "../lib/tracer.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -149,13 +151,20 @@ async function bucketizeBatch(
   batchIdx: number,
   totalBatches: number,
   batchFile: string,
+  tracer: OrchestratorTracer,
 ): Promise<IssueTypeBucket[]> {
   process.stderr.write(`  Batch ${batchIdx}/${totalBatches}: fetching full details for ${keys.join(", ")}...\n`);
   const tickets = await Promise.all(keys.map((k) => fetchFullTicket(baseUrl, auth, k)));
-  return runBatchBucketizer(tickets, batchIdx, totalBatches, batchFile);
+  const env = tracer.getAgentEnv(`batch_bucketizer[${batchIdx}]`, "batch_bucketizer");
+  return runBatchBucketizer(tickets, batchIdx, totalBatches, batchFile, env);
 }
 
-async function analyzeAllIssueTypes(outputFile: string, baseUrl: string, auth: string): Promise<void> {
+async function analyzeAllIssueTypes(
+  outputFile: string,
+  baseUrl: string,
+  auth: string,
+  tracer: OrchestratorTracer,
+): Promise<void> {
   const merged = JSON.parse(fs.readFileSync(outputFile, "utf-8")) as IssueTypeBucket[];
   const analysisDir = outputFile.replace(/\.json$/, "-analysis");
 
@@ -166,7 +175,8 @@ async function analyzeAllIssueTypes(outputFile: string, baseUrl: string, auth: s
       const allTicketIds = bucket.causes_with_tickets.flatMap((c) => c.ticket_ids);
       const tickets = await Promise.all(allTicketIds.map((k) => fetchFullTicket(baseUrl, auth, k)));
       const outPath = path.join(analysisDir, `${slugify(bucket.issue_type)}.json`);
-      return runDeepAnalyzer(bucket, tickets, outPath);
+      const env = tracer.getAgentEnv(`deep_analyzer[${slugify(bucket.issue_type)}]`, "deep_analyzer");
+      return runDeepAnalyzer(bucket, tickets, outPath, env);
     })
   );
 
@@ -194,32 +204,46 @@ async function main(): Promise<void> {
   }
   const auth = Buffer.from(`${email}:${apiToken}`).toString("base64");
 
-  // Step 1: fetch ticket IDs
-  const ticketIds = fetchTicketIds(connector, months, rawFile);
+  // Tracer — local OTLP receiver + live HTML report next to the output file.
+  const runId = randomUUID();
+  const tracer = new OrchestratorTracer(`${connector} · ${months}mo`, runId);
+  const traceHtmlPath = outputFile.replace(/\.json$/, "-trace.html");
+  fs.mkdirSync(path.dirname(path.resolve(traceHtmlPath)), { recursive: true });
+  tracer.startLiveReport(traceHtmlPath);
+  console.error(`OTLP receiver on port ${tracer.port}`);
+  console.error(`Live trace → ${path.resolve(traceHtmlPath)}`);
 
-  console.error(`\nBucketizing ${ticketIds.length} tickets in batches of ${BATCH_SIZE}...`);
+  try {
+    // Step 1: fetch ticket IDs
+    const ticketIds = fetchTicketIds(connector, months, rawFile);
 
-  // Step 2: split into batches, fetch full details + run agents in parallel
-  const batches: string[][] = [];
-  for (let i = 0; i < ticketIds.length; i += BATCH_SIZE) {
-    batches.push(ticketIds.slice(i, i + BATCH_SIZE));
+    console.error(`\nBucketizing ${ticketIds.length} tickets in batches of ${BATCH_SIZE}...`);
+
+    // Step 2: split into batches, fetch full details + run agents in parallel
+    const batches: string[][] = [];
+    for (let i = 0; i < ticketIds.length; i += BATCH_SIZE) {
+      batches.push(ticketIds.slice(i, i + BATCH_SIZE));
+    }
+
+    const batchFiles = batches.map((_, idx) =>
+      outputFile.replace(/\.json$/, `-batch-${String(idx + 1).padStart(2, "0")}.json`)
+    );
+
+    await Promise.all(
+      batches.map((batch, idx) =>
+        bucketizeBatch(batch, baseUrl, auth, idx + 1, batches.length, batchFiles[idx], tracer)
+      )
+    );
+
+    // Step 3: merge all batch files with an agent
+    const mergerEnv = tracer.getAgentEnv("merger", "merger");
+    await runMerger(batchFiles, outputFile, mergerEnv);
+
+    // Step 4: spawn one deep-analysis agent per issue type
+    await analyzeAllIssueTypes(outputFile, baseUrl, auth, tracer);
+  } finally {
+    await tracer.writeReport(path.dirname(path.resolve(traceHtmlPath)));
   }
-
-  const batchFiles = batches.map((_, idx) =>
-    outputFile.replace(/\.json$/, `-batch-${String(idx + 1).padStart(2, "0")}.json`)
-  );
-
-  await Promise.all(
-    batches.map((batch, idx) =>
-      bucketizeBatch(batch, baseUrl, auth, idx + 1, batches.length, batchFiles[idx])
-    )
-  );
-
-  // Step 3: merge all batch files with an agent
-  await runMerger(batchFiles, outputFile);
-
-  // Step 4: spawn one deep-analysis agent per issue type
-  await analyzeAllIssueTypes(outputFile, baseUrl, auth);
 }
 
 main().catch((err) => {

@@ -48,6 +48,7 @@ export async function runDeepAnalyzer(
   bucket: IssueTypeBucket,
   tickets: FullTicket[],
   outPath: string,
+  env: Record<string, string>,
 ): Promise<void> {
   const allTicketIds = bucket.causes_with_tickets.flatMap((c) => c.ticket_ids);
   process.stderr.write(`  Analyzing: "${bucket.issue_type}" (${allTicketIds.length} tickets)...\n`);
@@ -55,7 +56,7 @@ export async function runDeepAnalyzer(
   const prompt = buildPrompt(bucket, tickets);
 
   let resultText = "";
-  for await (const msg of query({ prompt })) {
+  for await (const msg of query({ prompt, options: { env } })) {
     if (msg.type === "result" && msg.subtype === "success") {
       resultText = msg.result;
     }

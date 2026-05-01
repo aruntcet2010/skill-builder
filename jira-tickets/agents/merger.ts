@@ -35,7 +35,11 @@ Rules:
 - Sort by total ticket count descending`;
 }
 
-export async function runMerger(batchFiles: string[], outputFile: string): Promise<IssueTypeBucket[]> {
+export async function runMerger(
+  batchFiles: string[],
+  outputFile: string,
+  env: Record<string, string>,
+): Promise<IssueTypeBucket[]> {
   const allBatches = batchFiles.map((f, i) => ({
     batch: i + 1,
     buckets: JSON.parse(fs.readFileSync(f, "utf-8")) as IssueTypeBucket[],
@@ -46,7 +50,7 @@ export async function runMerger(batchFiles: string[], outputFile: string): Promi
   const prompt = buildPrompt(allBatches);
 
   let resultText = "";
-  for await (const msg of query({ prompt })) {
+  for await (const msg of query({ prompt, options: { env } })) {
     if (msg.type === "result" && msg.subtype === "success") {
       resultText = msg.result;
     }
