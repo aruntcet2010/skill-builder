@@ -28,6 +28,8 @@ Each entry in the output JSON must have these fields:
 - ticket_ids: string array
 - keywords: string array (actual error messages or search phrases from ticket content)
 
+Read the output file path before writing to it (even if it does not exist yet — that is fine).
+
 Write ONLY the JSON array to the file — no markdown, no explanation, no code fences.`;
 }
 

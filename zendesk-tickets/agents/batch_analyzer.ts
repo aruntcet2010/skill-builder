@@ -19,7 +19,8 @@ For each distinct symptom group return a JSON object with these fields:
 Write the final JSON array to: ${outputPath}
 
 Rules:
-- Read ALL files before extracting symptoms
+- Read ALL ticket files before extracting symptoms
+- Read the output file path before writing to it (even if it does not exist yet — that is fine)
 - Group by customer-visible symptom — same symptom, different root cause = same group
 - One ticket can only belong to one symptom group (pick the best match)
 - Write ONLY a valid JSON array to the file — no markdown, no explanation, no code fences

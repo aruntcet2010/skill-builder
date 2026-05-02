@@ -37,6 +37,7 @@ Rules:
 - Extract exact error messages and keywords from the tickets — do not paraphrase
 - Group tickets under the cause that best explains them
 - If all tickets share the same root cause, write only one Cause section
+- Read the output file path before writing to it (even if it does not exist yet — that is fine)
 - Write the file when done — do not return the content as text`;
 }
 

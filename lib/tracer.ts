@@ -184,82 +184,131 @@ export class OrchestratorTracer {
   }
 
   private async buildAgentRuns(): Promise<AgentRun[]> {
-    // Map request_id -> llm_request.context from spans (to filter out "standalone" title calls)
-    const contextByReqId = new Map<string, string>();
+    // Build span index (skip "standalone" title-generation calls)
     const spanByReqId = new Map<string, RawSpan>();
+    const standaloneReqIds = new Set<string>();
     for (const s of this.spans) {
       if (s.spanName !== "claude_code.llm_request") continue;
       const reqId = String(s.attrs["request_id"] ?? "");
       if (!reqId) continue;
-      contextByReqId.set(reqId, String(s.attrs["llm_request.context"] ?? "interaction"));
+      if (String(s.attrs["llm_request.context"] ?? "") === "standalone") {
+        standaloneReqIds.add(reqId);
+        continue;
+      }
       spanByReqId.set(reqId, s);
     }
 
-    // Pair api_request_body + api_response_body log events per session (sorted by sequence, paired by index)
-    const reqLogs = this.logs.filter(l => l.eventName === "api_request_body");
-    const resLogs = this.logs.filter(l => l.eventName === "api_response_body");
-    const sessions = [...new Set([...reqLogs, ...resLogs].map(l => l.sessionId))];
-
-    const runs = new Map<string, AgentRun>();
-    let globalSeq = 0;
-
-    for (const sid of sessions) {
-      const reqs = reqLogs.filter(l => l.sessionId === sid).sort((a, b) => a.sequence - b.sequence);
-      const ress = resLogs.filter(l => l.sessionId === sid).sort((a, b) => a.sequence - b.sequence);
-      const agentName = reqs[0]?.agentName || ress[0]?.agentName || `session_${sid.slice(0, 8)}`;
-      const agentType = reqs[0]?.agentType || ress[0]?.agentType || "unknown";
-
-      if (!runs.has(sid)) {
-        runs.set(sid, { name: agentName, type: agentType, sessionId: sid, turns: [] });
+    // Scan bodiesDir directly for response files — written synchronously, don't need OTLP flush.
+    // This is the source of truth for which API calls happened.
+    const resFileByReqId = new Map<string, string>(); // reqId -> absolute path
+    try {
+      for (const f of await fs.readdir(this.bodiesDir)) {
+        const m = f.match(/^(req_[^.]+)\.response\.json$/);
+        if (m && !standaloneReqIds.has(m[1])) {
+          resFileByReqId.set(m[1], path.join(this.bodiesDir, f));
+        }
       }
-      const run = runs.get(sid)!;
+    } catch { /* bodiesDir may not exist yet during live preview */ }
 
-      const count = Math.min(reqs.length, ress.length);
-      for (let i = 0; i < count; i++) {
-        const reqBodyRef = String(reqs[i].attrs["body_ref"] ?? "");
-        const resBodyRef = String(ress[i].attrs["body_ref"] ?? "");
-        const requestId  = String(ress[i].attrs["request_id"] ?? "");
+    // Build OTLP log indexes:
+    // - reqLogs by session (positional fallback for request body paths)
+    // - resLogs by reqId (for session assignment when no span arrived)
+    const reqLogsBySession = new Map<string, RawLog[]>();
+    const resLogByReqId = new Map<string, RawLog>();
+    for (const l of this.logs) {
+      if (l.eventName === "api_request_body") {
+        if (!reqLogsBySession.has(l.sessionId)) reqLogsBySession.set(l.sessionId, []);
+        reqLogsBySession.get(l.sessionId)!.push(l);
+      } else if (l.eventName === "api_response_body") {
+        const reqId = String(l.attrs["request_id"] ?? "");
+        if (reqId) resLogByReqId.set(reqId, l);
+      }
+    }
+    for (const logs of reqLogsBySession.values()) {
+      logs.sort((a, b) => a.sequence - b.sequence);
+    }
 
-        if (!reqBodyRef || !resBodyRef) continue;
+    // Assign each reqId to a session: spans > OTLP response logs > orphan synthetic session
+    const sessionByReqId = new Map<string, string>();
+    for (const [reqId, span] of spanByReqId) {
+      const sid = String(span.attrs["session.id"] ?? "");
+      if (sid) sessionByReqId.set(reqId, sid);
+    }
+    for (const [reqId, log] of resLogByReqId) {
+      if (!sessionByReqId.has(reqId) && log.sessionId) {
+        sessionByReqId.set(reqId, log.sessionId);
+      }
+    }
 
-        // Skip internal title-generation calls
-        const ctx = contextByReqId.get(requestId);
-        if (ctx === "standalone") continue;
+    // Collect agent name/type per session from spans and logs
+    const agentInfoBySession = new Map<string, { name: string; type: string }>();
+    for (const s of this.spans) {
+      const sid = String(s.attrs["session.id"] ?? "");
+      if (sid && s.agentName && !agentInfoBySession.has(sid)) {
+        agentInfoBySession.set(sid, { name: s.agentName, type: s.agentType });
+      }
+    }
+    for (const l of this.logs) {
+      if (l.sessionId && l.agentName && !agentInfoBySession.has(l.sessionId)) {
+        agentInfoBySession.set(l.sessionId, { name: l.agentName, type: l.agentType });
+      }
+    }
+
+    // Group reqIds by session, sorted lexicographically (Anthropic reqIds are time-ordered)
+    const sessionReqIds = new Map<string, string[]>();
+    for (const reqId of resFileByReqId.keys()) {
+      const sid = sessionByReqId.get(reqId) ?? `orphan_${reqId.slice(4, 12)}`;
+      if (!sessionReqIds.has(sid)) sessionReqIds.set(sid, []);
+      sessionReqIds.get(sid)!.push(reqId);
+    }
+    for (const ids of sessionReqIds.values()) ids.sort();
+
+    // Build one AgentRun per session
+    const runs = new Map<string, AgentRun>();
+
+    for (const [sid, reqIds] of sessionReqIds) {
+      const info = agentInfoBySession.get(sid) ?? { name: `session_${sid.slice(0, 8)}`, type: "unknown" };
+      const run: AgentRun = { name: info.name, type: info.type, sessionId: sid, turns: [] };
+      const reqLogs = reqLogsBySession.get(sid) ?? [];
+
+      for (let i = 0; i < reqIds.length; i++) {
+        const reqId = reqIds[i];
+        const resFilePath = resFileByReqId.get(reqId)!;
+        // Request body: positional match within session (request logs arrive in order)
+        const reqFilePath = String(reqLogs[i]?.attrs["body_ref"] ?? "");
 
         let reqBody: any = {};
         let resBody: any = {};
-        try { reqBody = JSON.parse(await fs.readFile(reqBodyRef, "utf8")); } catch { /* skip */ }
-        try { resBody = JSON.parse(await fs.readFile(resBodyRef, "utf8")); } catch { /* skip */ }
+        try { resBody = JSON.parse(await fs.readFile(resFilePath, "utf8")); } catch { /* skip */ }
+        if (reqFilePath) {
+          try { reqBody = JSON.parse(await fs.readFile(reqFilePath, "utf8")); } catch { /* skip */ }
+        }
 
-        const span = spanByReqId.get(requestId);
-        const inputTokens       = Number(span?.attrs["input_tokens"]        ?? (resBody.usage?.input_tokens ?? 0));
-        const outputTokens      = Number(span?.attrs["output_tokens"]       ?? (resBody.usage?.output_tokens ?? 0));
-        const cacheReadTokens   = Number(span?.attrs["cache_read_tokens"]   ?? (resBody.usage?.cache_read_input_tokens ?? 0));
+        const span = spanByReqId.get(reqId);
+        const inputTokens         = Number(span?.attrs["input_tokens"]          ?? (resBody.usage?.input_tokens ?? 0));
+        const outputTokens        = Number(span?.attrs["output_tokens"]         ?? (resBody.usage?.output_tokens ?? 0));
+        const cacheReadTokens     = Number(span?.attrs["cache_read_tokens"]     ?? (resBody.usage?.cache_read_input_tokens ?? 0));
         const cacheCreationTokens = Number(span?.attrs["cache_creation_tokens"] ?? (resBody.usage?.cache_creation_input_tokens ?? 0));
-        const model       = String(span?.attrs["model"]       ?? resBody.model ?? "claude-sonnet-4-6");
-        const durationMs  = Number(span?.attrs["duration_ms"] ?? 0);
-        const ttftMs      = Number(span?.attrs["ttft_ms"]     ?? 0);
-        const stopReason  = String(span?.attrs["stop_reason"] ?? resBody.stop_reason ?? "");
+        const model      = String(span?.attrs["model"]       ?? resBody.model ?? "claude-sonnet-4-6");
+        const durationMs = Number(span?.attrs["duration_ms"] ?? 0);
+        const ttftMs     = Number(span?.attrs["ttft_ms"]     ?? 0);
+        const stopReason = String(span?.attrs["stop_reason"] ?? resBody.stop_reason ?? "");
 
-        // System prompt
         const sysRaw = reqBody.system ?? [];
         const systemPrompt = Array.isArray(sysRaw)
           ? sysRaw.map((b: any) => (typeof b === "string" ? b : (b.text ?? ""))).join("\n\n")
           : String(sysRaw);
 
-        // Message history
         const messages = (reqBody.messages ?? []).map((m: any) => ({
           role: String(m.role ?? "user"),
           content: renderContent(m.content),
         }));
 
-        // Tool definitions from request
         const tools = (reqBody.tools ?? []).map((t: any) => ({
           name: String(t.name ?? ""),
           description: String(t.description ?? ""),
         }));
 
-        // Response content
         const responseContent = resBody.content ?? [];
         const responseText = responseContent
           .filter((b: any) => b.type === "text")
@@ -269,7 +318,6 @@ export class OrchestratorTracer {
           .filter((b: any) => b.type === "tool_use")
           .map((b: any) => ({ name: String(b.name ?? ""), input: b.input ?? {} }));
 
-        globalSeq++;
         run.turns.push({
           seq: run.turns.length + 1,
           model, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens,
@@ -278,9 +326,11 @@ export class OrchestratorTracer {
           systemPrompt, messages, tools, responseText, toolUses,
         });
       }
+
+      if (run.turns.length > 0) runs.set(sid, run);
     }
 
-    return [...runs.values()].filter(r => r.turns.length > 0);
+    return [...runs.values()];
   }
 
   /** Start writing the HTML every intervalMs so it can be refreshed during the run. */
@@ -358,8 +408,12 @@ function turnCard(t: Turn, runCost: number, seq: number): string {
   const totalIn = t.inputTokens + t.cacheReadTokens + t.cacheCreationTokens;
   const tokenRow = `in=${totalIn.toLocaleString()} out=${t.outputTokens.toLocaleString()} cache_read=${t.cacheReadTokens.toLocaleString()} cache_write=${t.cacheCreationTokens.toLocaleString()}`;
 
+  const toolCounts = t.toolUses.reduce<Record<string, number>>((acc, u) => {
+    acc[u.name] = (acc[u.name] ?? 0) + 1;
+    return acc;
+  }, {});
   const toolPills = t.toolUses.length
-    ? `<span class="pills">${[...new Set(t.toolUses.map(u => u.name))].map(n => `<span class="pill">${esc(n)}</span>`).join("")}</span>`
+    ? `<span class="pills">${Object.entries(toolCounts).map(([n, c]) => `<span class="pill">${esc(n)}${c > 1 ? ` x${c}` : ""}</span>`).join("")}</span>`
     : "";
 
   // Tools used blocks
