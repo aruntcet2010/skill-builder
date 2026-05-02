@@ -1,29 +1,35 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { query, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk";
 import * as fs from "fs";
-import * as path from "path";
-import { formatTicketDump, type FullTicket, type IssueTypeBucket } from "./types.js";
 
-function buildPrompt(bucket: IssueTypeBucket, tickets: FullTicket[]): string {
-  const allTicketIds = bucket.causes_with_tickets.flatMap((c) => c.ticket_ids);
-  const causesSummary = bucket.causes_with_tickets
-    .map((c) => `- Cause: "${c.cause}" → Tickets: ${c.ticket_ids.join(", ")}`)
-    .join("\n");
-
+function buildPrompt(
+  issueType: string,
+  connectorTitle: string,
+  ticketIds: string[],
+  dedupJsonPath: string,
+  rawDir: string,
+  outputJsonPath: string,
+  outputMdPath: string,
+): string {
   return `You are a Hevo Data oncall analyst doing a deep analysis of a specific issue type.
 
-Issue Type: "${bucket.issue_type}"
+Issue Type: "${issueType}"
+Connector: ${connectorTitle}
 
-Pre-classified causes and their tickets:
-${causesSummary}
+Step 1 — Read the deduplicated buckets file using the Read tool to find the exact entry for this issue_type and its pre-classified causes:
+${dedupJsonPath}
 
-Full ticket content for all ${allTicketIds.length} tickets in this issue type:
+Step 2 — Read the full ticket content for every ticket in this issue type. Each ticket lives at:
+  ${rawDir}/ticket_<KEY>.md
 
-${formatTicketDump(tickets)}
+Ticket keys to read (${ticketIds.length} total): ${ticketIds.join(", ")}
 
-Produce a detailed analysis as a single JSON object with no markdown or explanation:
+Step 3 — Write a structured analysis JSON file using the Write tool:
+${outputJsonPath}
+
+The JSON file must contain a single object — no markdown, no code fences, no commentary:
 
 {
-  "issue_type": "<exact issue type name>",
+  "issue_type": "${issueType}",
   "symptoms": ["<specific symptom observed by customers>", ...],
   "causes": [
     {
@@ -32,44 +38,92 @@ Produce a detailed analysis as a single JSON object with no markdown or explanat
       "explanation": "<detailed explanation of why this cause leads to the issue, what conditions trigger it, and how to identify it from ticket content>"
     }
   ],
-  "all_ticket_ids": ["HEVO-xxx", ...],
+  "all_ticket_ids": ${JSON.stringify(ticketIds)},
   "patterns": "<recurring themes, configurations, or conditions observed across all tickets in this issue type>"
 }
 
+Step 4 — Write the user-facing markdown using the Write tool:
+${outputMdPath}
+
+The markdown file must follow this exact format:
+
+# ${issueType}
+
+**Connector**: ${connectorTitle} · **Tickets**: ${ticketIds.length}
+
+## Symptoms
+
+- {one bullet per symptom from the JSON's symptoms array}
+
+## Root Causes
+
+### {cause label from JSON}
+
+**Tickets**: {comma-separated ticket IDs for this cause}
+
+{explanation paragraph from JSON — verbatim or lightly polished prose}
+
+### {next cause label}
+...repeat for every entry in causes[]...
+
+## Patterns
+
+{patterns string from JSON, as flowing prose}
+
+## All Tickets
+
+- {one bullet per ticket ID from all_ticket_ids}
+
 Rules:
+- Read the deduplicated buckets file AND every listed ticket file before writing
 - symptoms: what customers specifically complained about or observed (from descriptions and comments), not internal causes
 - causes[].explanation: go deep — explain the technical mechanism, trigger conditions, and how an oncall agent recognizes this from ticket content
 - patterns: highlight recurring themes such as specific versions, customer setups, or time-based trends
-- all_ticket_ids must include every ticket ID in this issue type exactly once
-- Do not invent information not present in the tickets`;
+- all_ticket_ids must include every ticket ID listed above exactly once
+- Do not invent information not present in the tickets
+- Write BOTH files via the Write tool — do not return content as text
+- The markdown must be consistent with the JSON: same causes, same ticket groupings, same patterns`;
 }
 
 export async function runDeepAnalyzer(
-  bucket: IssueTypeBucket,
-  tickets: FullTicket[],
-  outPath: string,
+  issueType: string,
+  connectorTitle: string,
+  ticketIds: string[],
+  dedupJsonPath: string,
+  rawDir: string,
+  outputJsonPath: string,
+  outputMdPath: string,
   env: Record<string, string>,
 ): Promise<void> {
-  const allTicketIds = bucket.causes_with_tickets.flatMap((c) => c.ticket_ids);
-  process.stderr.write(`  Analyzing: "${bucket.issue_type}" (${allTicketIds.length} tickets)...\n`);
+  process.stderr.write(`  Analyzing: "${issueType}" (${ticketIds.length} tickets)...\n`);
 
-  const prompt = buildPrompt(bucket, tickets);
+  const prompt = buildPrompt(
+    issueType, connectorTitle, ticketIds, dedupJsonPath, rawDir, outputJsonPath, outputMdPath,
+  );
 
-  let resultText = "";
-  for await (const msg of query({ prompt, options: { env } })) {
-    if (msg.type === "result" && msg.subtype === "success") {
-      resultText = msg.result;
+  for await (const message of query({
+    prompt,
+    options: {
+      model: "claude-sonnet-4-6",
+      tools: ["Read", "Write"],
+      permissionMode: "bypassPermissions",
+      settingSources: [],
+      mcpServers: {},
+      strictMcpConfig: true,
+      maxTurns: 40,
+      env,
+    },
+  })) {
+    const msg = message as SDKMessage;
+    if (msg.type === "result" && (msg as SDKResultMessage).is_error) {
+      throw new Error(`deep_analyzer failed for "${issueType}"`);
     }
   }
 
-  const jsonMatch = resultText.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    process.stderr.write(`  Could not parse agent response for issue type "${bucket.issue_type}"\n`);
-    return;
+  if (!fs.existsSync(outputJsonPath)) {
+    process.stderr.write(`  WARNING: deep_analyzer did not write ${outputJsonPath}\n`);
   }
-
-  const analysis = JSON.parse(jsonMatch[0]);
-  fs.mkdirSync(path.dirname(outPath), { recursive: true });
-  fs.writeFileSync(outPath, JSON.stringify(analysis, null, 2), "utf-8");
-  process.stderr.write(`  Written: ${outPath}\n`);
+  if (!fs.existsSync(outputMdPath)) {
+    process.stderr.write(`  WARNING: deep_analyzer did not write ${outputMdPath}\n`);
+  }
 }

@@ -18,17 +18,36 @@ export interface IssueTypeBucket {
   causes_with_tickets: CauseWithTickets[];
 }
 
-export function formatTicketDump(tickets: FullTicket[]): string {
-  return tickets.map((t) => {
-    const commentBlock = t.comments.length
-      ? t.comments.map((c) => `    [${c.author} @ ${c.created.slice(0, 10)}]: ${c.body}`).join("\n")
-      : "    (none)";
-    return `Key: ${t.key}
-Summary: ${t.summary}
-Status: ${t.status} | Priority: ${t.priority} | Customer Impact: ${t.customerImpact ?? "N/A"}
-Description:
-  ${t.description || "(empty)"}
-Comments:
-${commentBlock}`;
-  }).join("\n\n---\n\n");
+export function formatTicketAsMarkdown(t: FullTicket): string {
+  const lines = [
+    `# ${t.key}: ${t.summary}`,
+    "",
+    "## Metadata",
+    `- **Status:** ${t.status}`,
+    `- **Priority:** ${t.priority}`,
+    `- **Customer Impact:** ${t.customerImpact ?? "N/A"}`,
+    `- **Comment Count:** ${t.comments.length}`,
+    "",
+    "## Description",
+    "",
+    t.description || "_(empty)_",
+    "",
+    "## Comments",
+    "",
+  ];
+
+  if (t.comments.length === 0) {
+    lines.push("_(none)_");
+  } else {
+    t.comments.forEach((c, i) => {
+      lines.push(`### Comment ${i + 1}`);
+      lines.push(`- **Author:** ${c.author}`);
+      lines.push(`- **Created:** ${c.created.slice(0, 19).replace("T", " ")}`);
+      lines.push("");
+      lines.push(c.body || "_(empty)_");
+      lines.push("");
+    });
+  }
+
+  return lines.join("\n");
 }
