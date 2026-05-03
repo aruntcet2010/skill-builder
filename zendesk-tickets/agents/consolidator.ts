@@ -63,6 +63,7 @@ export async function runConsolidator(
       mcpServers: {},
       strictMcpConfig: true,
       maxTurns: 50,
+      maxThinkingTokens: 64000,
       env,
     },
   });
