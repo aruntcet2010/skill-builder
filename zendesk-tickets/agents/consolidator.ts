@@ -12,10 +12,9 @@ ${batchFilePaths.join("\n")}
 
 Then:
 1. Deduplicate: if two entries describe the same customer-visible problem (even if worded differently), merge them — combine ticket_ids, write a unified description. Do NOT merge problems that occur at different stages (e.g. "object not found during setup" vs "object is configured but data is missing in destination" are separate problems)
-2. Drop any problem with fewer than 2 ticket_ids after merging
+2. Drop any problem with fewer than 3 ticket_ids after merging
 3. Sort by total ticket_ids count descending (most frequent first)
-4. Take the top 20
-5. Assign each a unique slug: 3-4 word kebab-case describing the customer problem (e.g. "records-missing-destination", "pipeline-stuck-loading", "source-object-unavailable", "destination-column-limit-exceeded")
+4. Assign each a unique slug: 3-4 word kebab-case describing the customer problem (e.g. "records-missing-destination", "pipeline-stuck-loading", "source-object-unavailable", "destination-column-limit-exceeded")
 
 Write the final JSON array to: ${outputPath}
 
