@@ -12,8 +12,8 @@ ${ticketPaths.join("\n")}
 
 For each distinct symptom group return a JSON object with these fields:
 - title: concise symptom title from the customer's perspective (max 15 words, e.g. "Binlog Not Syncing", "OAuth Token Keeps Expiring")
-- severity: "critical" | "high" | "medium" | "low" (highest seen across related tickets)
-- description: one sentence describing what the customer sees (based only on ticket content)
+- description: 2-3 sentences describing exactly what the customer experiences. Must include: (1) the specific surface where they notice the problem (e.g. "during pipeline setup in the Schema Mapper", "in the Pipeline Overview tab", "in the destination table"), (2) the exact error message verbatim if one appears in the ticket, (3) any specific object names, table names, or field names the customer mentioned
+- root_cause: 1-2 sentences summarising the technical root cause based on agent investigation comments in the tickets. If multiple root causes exist across tickets, list them separated by " / ". If no agent investigation is present, write ""
 - ticket_ids: string array of ALL ticket IDs in this symptom group
 
 Write the final JSON array to: ${outputPath}
@@ -22,9 +22,10 @@ Rules:
 - Read ALL ticket files before extracting symptoms
 - Read the output file path before writing to it (even if it does not exist yet — that is fine)
 - Group by customer-visible symptom — same symptom, different root cause = same group
+- Keep symptom groups separate if customers encounter them at different surfaces or stages (e.g. "can't find object during pipeline setup" is different from "object is configured but data is missing in destination")
 - One ticket can only belong to one symptom group (pick the best match)
 - Write ONLY a valid JSON array to the file — no markdown, no explanation, no code fences
-- If a ticket has no useful signal (e.g. spam, test ticket), skip it`;
+- If a ticket has no useful signal (e.g. spam, test ticket, pure query with no actionable issue), skip it`;
 }
 
 export async function runBatchAnalyzer(

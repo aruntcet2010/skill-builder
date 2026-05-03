@@ -138,26 +138,16 @@ async function writeSelectionMd(
   const connectorDir = path.join(SKILL_DIR, connector);
   const cap = connector.charAt(0).toUpperCase() + connector.slice(1);
 
-  const mappingLines = symptoms.flatMap(s =>
-    s.keywords.map(kw => `→ **"${kw}"** → [${s.title}](${s.slug}.md)`)
-  ).join("\n");
-
   const tableRows = symptoms
-    .map(s => `| ${s.title} | ${s.severity} | ${s.ticket_ids.length} | [${s.slug}.md](${s.slug}.md) |`)
+    .map(s => `| [${s.title}](${s.slug}.md) | ${s.summary} | ${s.ticket_ids.length} |`)
     .join("\n");
 
   const content = `# ${cap} — Issue Index
 
-**${totalTickets} tickets → ${symptoms.length} distinct symptoms** (last ${months} month(s))
+**${totalTickets} tickets · ${symptoms.length} known symptoms** (last ${months} month(s))
 
-## Symptom → Issue Mapping
-
-${mappingLines}
-
-## All Issues (most frequent first)
-
-| Title | Severity | Tickets | File |
-|-------|----------|---------|------|
+| Issue | When to read this | Tickets |
+|-------|-------------------|---------|
 ${tableRows}
 `;
 

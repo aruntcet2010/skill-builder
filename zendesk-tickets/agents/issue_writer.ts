@@ -5,6 +5,7 @@ function buildPrompt(symptom: Symptom, ticketPaths: string[], outputPath: string
   return `You are a support ticket analyst writing a detailed oncall issue file.
 
 Symptom: ${symptom.title}
+Root cause hint (from prior analysis — use as a starting point, verify against tickets): ${symptom.root_cause || "none"}
 Output file: ${outputPath}
 
 Read each of the following ticket files using the Read tool:
@@ -14,7 +15,7 @@ Then write the issue file to the output path using the Write tool. Follow this e
 
 # ${symptom.title}
 
-**Severity:** ${symptom.severity} | **Tickets:** ${symptom.ticket_ids.length}
+**Tickets:** ${symptom.ticket_ids.length}
 
 ## What the Customer Sees
 {2-3 sentences describing exactly what the customer experiences, using their own words and exact error messages from the tickets}
@@ -37,6 +38,10 @@ Rules:
 - Extract exact error messages and keywords from the tickets — do not paraphrase
 - Group tickets under the cause that best explains them
 - If all tickets share the same root cause, write only one Cause section
+- Order resolution steps by what actually resolved the ticket first — put the confirmed fix before alternatives or workarounds
+- If a resolution step was tried in a ticket but abandoned in favour of a different approach, do not include the abandoned step
+- If a resolution was not confirmed by the customer or agent (ticket closed without confirmation, or root cause marked as unknown), say so explicitly — do not present unverified explanations as confirmed facts
+- Do not generalise code examples, API endpoints, or commands beyond what the tickets explicitly show — if an example only applies to a specific object type or configuration, scope it accordingly
 - Read the output file path before writing to it (even if it does not exist yet — that is fine)
 - Write the file when done — do not return the content as text`;
 }
