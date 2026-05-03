@@ -40,8 +40,6 @@ Example of a well-formed entry:
   "ticket_ids": ["12345", "12346", "12347"]
 }
 
-Read the output file path before writing to it (even if it does not exist yet — that is fine).
-
 Write ONLY the JSON array to the file — no markdown, no explanation, no code fences.`;
 }
 

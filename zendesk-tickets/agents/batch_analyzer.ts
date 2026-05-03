@@ -42,7 +42,6 @@ Write the final JSON array to: ${outputPath}
 
 Rules:
 - Read ALL ticket files before extracting problems
-- Read the output file path before writing to it (even if it does not exist yet — that is fine)
 - Group by customer-visible problem — same observable problem, different root cause = same group
 - Keep groups separate if the problem occurs at different stages (e.g. "object not found during setup" is a different group from "object is configured but data is missing in destination")
 - One ticket can only belong to one group — pick the group that best matches the customer's primary complaint

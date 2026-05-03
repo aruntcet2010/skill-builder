@@ -44,7 +44,6 @@ Rules:
 - Every Cause section must include its own concrete resolution steps — do not substitute a reference or pointer to another Cause section; if the ticket only explains why the problem occurs without a confirmed fix, state what the customer was advised and whether it was confirmed
 - Do not include customer or company names — use "a customer" or "affected accounts" instead
 - Do not include support tier labels (L1, L2, L3) — use "escalated internally" instead
-- Read the output file path before writing to it (even if it does not exist yet — that is fine)
 - Write the file when done — do not return the content as text`;
 }
 
