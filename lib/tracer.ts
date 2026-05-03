@@ -366,18 +366,25 @@ export class OrchestratorTracer {
 // ── Content renderer ──────────────────────────────────────────────────────────
 
 function renderContent(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return JSON.stringify(content);
+  if (typeof content === "string") return esc(content);
+  if (!Array.isArray(content)) return esc(JSON.stringify(content));
   return (content as any[]).map((b: any) => {
-    if (b.type === "text") return String(b.text ?? "");
-    if (b.type === "tool_use") return `→ ${b.name}(${JSON.stringify(b.input ?? {}).slice(0, 200)})`;
+    if (b.type === "text") return esc(String(b.text ?? ""));
+    if (b.type === "tool_use") {
+      const args = JSON.stringify(b.input ?? {});
+      const escaped = esc(args);
+      if (args.length <= 200) return `→ ${esc(String(b.name ?? ""))}(${escaped})`;
+      return `→ ${esc(String(b.name ?? ""))}<span class="tool-result-block">(<span class="tr-preview">${esc(args.slice(0, 200))}…</span><span class="tr-full" style="display:none">${escaped}</span>)<button class="show-more tr-btn">show more</button></span>`;
+    }
     if (b.type === "tool_result") {
       const out = Array.isArray(b.content)
         ? b.content.map((c: any) => c.text ?? "").join("")
         : String(b.content ?? "");
-      return `[tool_result: ${out.slice(0, 400)}${out.length > 400 ? "…" : ""}]`;
+      const escaped = esc(out);
+      if (out.length <= 400) return `[tool_result: ${escaped}]`;
+      return `<span class="tool-result-block">[tool_result: <span class="tr-preview">${esc(out.slice(0, 400))}…</span><span class="tr-full" style="display:none">${escaped}</span>]<button class="show-more tr-btn">show more</button></span>`;
     }
-    return JSON.stringify(b);
+    return esc(JSON.stringify(b));
   }).join("\n");
 }
 
@@ -439,11 +446,11 @@ function turnCard(t: Turn, runCost: number, seq: number): string {
 
   // Messages section
   const sysBlock = t.systemPrompt
-    ? `<div class="msg"><div class="msg-role" style="color:#f59e0b">SYSTEM</div><div class="msg-content">${esc(t.systemPrompt)}</div></div>`
+    ? `<div class="msg"><div class="msg-role" style="color:#f59e0b">SYSTEM</div><div class="msg-content" style="white-space:pre-wrap">${esc(t.systemPrompt)}</div></div>`
     : "";
   const msgBlocks = t.messages.map(m => {
     const color = m.role === "user" ? "#3b82f6" : "#22c55e";
-    return `<div class="msg"><div class="msg-role" style="color:${color}">${esc(m.role.toUpperCase())}</div><div class="msg-content">${esc(m.content)}</div></div>`;
+    return `<div class="msg"><div class="msg-role" style="color:${color}">${esc(m.role.toUpperCase())}</div><div class="msg-content">${m.content}</div></div>`;
   }).join("");
   const totalMsgCount = t.messages.length + (t.systemPrompt ? 1 : 0);
   const messagesSection = totalMsgCount ? `<details class="sub-details">
@@ -586,9 +593,11 @@ sub-details{margin-top:10px}
 .tool-def-desc{font-size:11px;color:var(--dim);white-space:pre-wrap;margin-top:2px}
 .msg{margin-bottom:10px}
 .msg-role{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px}
-.msg-content{font-family:var(--mono);font-size:11px;white-space:pre-wrap;word-break:break-all;background:var(--surface2);padding:6px 8px;border-radius:var(--radius);max-height:200px;overflow:auto}
+.msg-content{font-family:var(--mono);font-size:11px;white-space:pre-wrap;word-break:break-all;background:var(--surface2);padding:6px 8px;border-radius:var(--radius)}
 .live-badge{margin-left:auto;font-size:11px;color:#22c55e;font-family:var(--mono);animation:pulse 2s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.tool-result-block{display:inline}
+.tr-preview,.tr-full{white-space:pre-wrap;word-break:break-all}
 </style>
 </head><body>
 <header>
@@ -611,9 +620,19 @@ document.addEventListener('DOMContentLoaded',function(){
   document.querySelectorAll('.show-more').forEach(function(btn){
     btn.addEventListener('click',function(e){
       e.stopPropagation();
-      var t=btn.previousElementSibling;
-      var exp=t.classList.toggle('expanded');
-      btn.textContent=exp?'show less':'show more';
+      if(btn.classList.contains('tr-btn')){
+        var block=btn.closest('.tool-result-block');
+        var preview=block.querySelector('.tr-preview');
+        var full=block.querySelector('.tr-full');
+        var exp=full.style.display!=='none';
+        preview.style.display=exp?'':'none';
+        full.style.display=exp?'none':'';
+        btn.textContent=exp?'show more':'show less';
+      } else {
+        var t=btn.previousElementSibling;
+        var exp=t.classList.toggle('expanded');
+        btn.textContent=exp?'show less':'show more';
+      }
     });
   });
   document.querySelectorAll('tr[data-anchor]').forEach(function(row){
