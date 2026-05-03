@@ -4,7 +4,7 @@ import type { Symptom } from "./types.js";
 function buildPrompt(symptom: Symptom, ticketPaths: string[], outputPath: string): string {
   return `You are a support ticket analyst writing a detailed oncall issue file.
 
-Symptom: ${symptom.title}
+Problem: ${symptom.title}
 Output file: ${outputPath}
 
 Read each of the following ticket files using the Read tool:
@@ -14,7 +14,7 @@ Then write the issue file to the output path using the Write tool. Follow this e
 
 # ${symptom.title}
 
-**Severity:** ${symptom.severity} | **Tickets:** ${symptom.ticket_ids.length}
+**Tickets:** ${symptom.ticket_ids.length}
 
 ## What the Customer Sees
 {2-3 sentences describing exactly what the customer experiences, using their own words and exact error messages from the tickets}
@@ -37,6 +37,13 @@ Rules:
 - Extract exact error messages and keywords from the tickets — do not paraphrase
 - Group tickets under the cause that best explains them
 - If all tickets share the same root cause, write only one Cause section
+- Order resolution steps by what actually resolved the ticket first — put the confirmed fix before alternatives or workarounds
+- If a resolution step was tried in a ticket but abandoned in favour of a different approach, do not include the abandoned step
+- A root cause or resolution is CONFIRMED if a support staff member stated it directly as a fact in any comment or internal note — even if the ticket's RCA field is marked unknown or the ticket closed without customer confirmation. A root cause or resolution is UNCONFIRMED if support staff used hedging words ("suspect", "likely", "may be", "could be", "possibly", "appears to"), or if only a customer hypothesis or automated tool suggested it with no staff endorsement. Prefix with "Unconfirmed:" only in the second case — do not apply it to facts stated plainly by support staff
+- Do not generalise code examples, API endpoints, or commands beyond what the tickets explicitly show — if an example only applies to a specific object type or configuration, scope it accordingly; replace any ticket-specific values (field names, IDs, table names) with placeholders like <field_name> or <object_type> unless the specific value is itself the point of the example
+- Every Cause section must include its own concrete resolution steps — do not substitute a reference or pointer to another Cause section; if the ticket only explains why the problem occurs without a confirmed fix, state what the customer was advised and whether it was confirmed
+- Do not include customer or company names — use "a customer" or "affected accounts" instead
+- Do not include support tier labels (L1, L2, L3) — use "escalated internally" instead
 - Write the file when done — do not return the content as text`;
 }
 

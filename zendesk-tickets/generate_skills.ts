@@ -21,6 +21,7 @@ import { OrchestratorTracer } from "../lib/tracer.js";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RUN_ID = randomUUID();
+const TMP_DIR = path.join("/tmp", RUN_ID);
 const SKILL_DIR = path.join(REPO_ROOT, "generated", RUN_ID, "connector-oncall");
 
 const ALL_CONNECTORS = [
@@ -48,7 +49,7 @@ function fetchTickets(connector: string, months: number): Promise<void> {
       path.join(REPO_ROOT, "scripts/fetch_raw_tickets.ts"),
       "--connector", connector,
       "--months", String(months),
-      "--output", `/tmp/${connector}_tickets`,
+      "--output", `${TMP_DIR}/${connector}_tickets`,
     ], { stdio: "inherit" });
     child.on("exit", (code) =>
       code === 0 ? resolve() : reject(new Error(`fetch_raw_tickets exited with code ${code}`))
@@ -59,20 +60,32 @@ function fetchTickets(connector: string, months: number): Promise<void> {
 // ---------------------------------------------------------------------------
 // Step 2: read metadata, return batches of ticket paths
 // ---------------------------------------------------------------------------
-async function readAndBatch(connector: string, batchSize = 50): Promise<string[][]> {
-  const metadata = await fs.readFile(`/tmp/${connector}_tickets/metadata.md`, "utf8");
+async function readAndBatch(connector: string, maxBatchBytes = 200_000): Promise<string[][]> {
+  const metadata = await fs.readFile(`${TMP_DIR}/${connector}_tickets/metadata.md`, "utf8");
   const filenames: string[] = [];
   for (const line of metadata.split("\n")) {
     const match = line.match(/\|\s*\[[^\]]*\]\((\S+\.md)\)/);
     if (match) filenames.push(match[1]);
   }
-  const base = `/tmp/${connector}_tickets`;
+  const base = `${TMP_DIR}/${connector}_tickets`;
   const paths = filenames.map(f => path.join(base, f));
+  const sizes = await Promise.all(paths.map(p => fs.stat(p).then(s => s.size)));
+
   const batches: string[][] = [];
-  for (let i = 0; i < paths.length; i += batchSize) {
-    batches.push(paths.slice(i, i + batchSize));
+  let current: string[] = [];
+  let currentBytes = 0;
+  for (let i = 0; i < paths.length; i++) {
+    if (current.length > 0 && currentBytes + sizes[i] > maxBatchBytes) {
+      batches.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(paths[i]);
+    currentBytes += sizes[i];
   }
-  console.log(`  [${connector}] ${paths.length} tickets → ${batches.length} batches`);
+  if (current.length > 0) batches.push(current);
+
+  console.log(`  [${connector}] ${paths.length} tickets → ${batches.length} batches (max ${Math.round(maxBatchBytes / 1024)}KB each)`);
   return batches;
 }
 
@@ -83,7 +96,7 @@ async function analyzeBatches(connector: string, batches: string[][], tracer: Or
   console.log(`  [${connector}] running ${batches.length} batch analyzers in parallel...`);
   const batchFilePaths = await Promise.all(
     batches.map(async (batch, i) => {
-      const filePath = `/tmp/${connector}_batch_${i}.json`;
+      const filePath = `${TMP_DIR}/${connector}_batch_${i}.json`;
       const env = tracer.getAgentEnv(`batch_analyzer[${i}]`, "batch_analyzer");
       const symptoms = await runBatchAnalyzer(batch, filePath, env);
       console.log(`  [${connector}] batch ${i} done — ${symptoms.length} symptoms`);
@@ -98,7 +111,7 @@ async function analyzeBatches(connector: string, batches: string[][], tracer: Or
 // ---------------------------------------------------------------------------
 async function consolidate(connector: string, batchFilePaths: string[], tracer: OrchestratorTracer): Promise<Symptom[]> {
   console.log(`  [${connector}] consolidating ${batchFilePaths.length} batch files...`);
-  const outputPath = `/tmp/${connector}_symptoms.json`;
+  const outputPath = `${TMP_DIR}/${connector}_symptoms.json`;
   const env = tracer.getAgentEnv("consolidator", "consolidator");
   const symptoms = await runConsolidator(connector, batchFilePaths, outputPath, env);
   console.log(`  [${connector}] consolidated → ${symptoms.length} distinct symptoms`);
@@ -116,7 +129,7 @@ async function writeIssueFiles(connector: string, symptoms: Symptom[], tracer: O
   await Promise.all(
     symptoms.map(async (symptom) => {
       const ticketPaths = symptom.ticket_ids.map(
-        id => `/tmp/${connector}_tickets/ticket_${id}.md`
+        id => `${TMP_DIR}/${connector}_tickets/ticket_${id}.md`
       );
       const outputPath = path.join(connectorDir, `${symptom.slug}.md`);
       const env = tracer.getAgentEnv(`issue_writer[${symptom.slug}]`, "issue_writer");
@@ -138,26 +151,16 @@ async function writeSelectionMd(
   const connectorDir = path.join(SKILL_DIR, connector);
   const cap = connector.charAt(0).toUpperCase() + connector.slice(1);
 
-  const mappingLines = symptoms.flatMap(s =>
-    s.keywords.map(kw => `→ **"${kw}"** → [${s.title}](${s.slug}.md)`)
-  ).join("\n");
-
   const tableRows = symptoms
-    .map(s => `| ${s.title} | ${s.severity} | ${s.ticket_ids.length} | [${s.slug}.md](${s.slug}.md) |`)
+    .map(s => `| [${s.title}](${s.slug}.md) | ${s.summary} | ${s.ticket_ids.length} |`)
     .join("\n");
 
   const content = `# ${cap} — Issue Index
 
-**${totalTickets} tickets → ${symptoms.length} distinct symptoms** (last ${months} month(s))
+**${totalTickets} tickets · ${symptoms.length} known symptoms** (last ${months} month(s))
 
-## Symptom → Issue Mapping
-
-${mappingLines}
-
-## All Issues (most frequent first)
-
-| Title | Severity | Tickets | File |
-|-------|----------|---------|------|
+| Issue | When to read this | Tickets |
+|-------|-------------------|---------|
 ${tableRows}
 `;
 
@@ -192,7 +195,7 @@ ${rows}
 ## How to Use
 
 1. Find your connector in the table above
-2. Read \`{connector}/selection.md\` — maps symptoms and error keywords to specific issues
+2. Read \`{connector}/selection.md\` — lists known symptoms with a short description to find the right issue file
 3. Read the linked \`{slug}.md\` — full root causes, resolutions, and related tickets
 `;
 
