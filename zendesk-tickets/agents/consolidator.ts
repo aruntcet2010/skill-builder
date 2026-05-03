@@ -62,7 +62,7 @@ export async function runConsolidator(
       settingSources: [],
       mcpServers: {},
       strictMcpConfig: true,
-      maxTurns: 30,
+      maxTurns: 50,
       env,
     },
   });
@@ -70,6 +70,12 @@ export async function runConsolidator(
   for await (const message of rawStream) {
     const msg = message as SDKMessage;
     if (msg.type === "result" && (msg as SDKResultMessage).is_error) {
+      // Agent may have written the file before exhausting turns — use it if valid
+      try {
+        const content = await fs.readFile(outputPath, "utf8");
+        const result = JSON.parse(content) as Symptom[];
+        if (result.length > 0) return result;
+      } catch { /* fall through */ }
       throw new Error(`consolidator failed for ${connector}`);
     }
   }

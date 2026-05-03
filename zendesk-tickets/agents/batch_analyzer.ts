@@ -20,7 +20,10 @@ For each distinct problem group, return a JSON object with these fields:
   (3) the specific object, table, or field names involved, using placeholders like <object_type> or <field_name> for values that vary across tickets
   Describe the pattern — do not include customer names, company names, account IDs, or pipeline numbers.
 
-- root_causes: string array — one entry per distinct technical root cause found across the tickets in this group, based on investigation comments left by support staff. Each entry is 1-2 sentences explaining why the problem occurs. A cause explains a state or design constraint — not an action taken. If an entry contains verbs like "was deployed", "was fixed", "was enabled", "was changed", or "was configured", it is a resolution and must not be included here. Refer to the product as "the platform" or "the connector" — never use a brand name. If the cause was not confirmed (support staff used words like "suspect", "likely", "may be"), prefix the entry with "Unconfirmed:". If no investigation is present write []
+- root_causes: string array — one entry per distinct technical root cause found across the tickets in this group, based on investigation comments left by support staff. Each entry is 1-2 sentences explaining why the problem occurs. A cause explains a state or design constraint — not an action taken. If an entry contains verbs like "was deployed", "was fixed", "was enabled", "was changed", or "was configured", it is a resolution and must not be included here. Refer to the product as "the platform" or "the connector" — never use a brand name.
+  A cause is CONFIRMED if a support staff member stated it directly as a fact in any comment or internal note (e.g. "we don't support X", "the issue is caused by Y", "this happens because Z") — even if the ticket's RCA field is marked unknown or the ticket was closed without resolution.
+  A cause is UNCONFIRMED if: support staff used hedging words ("suspect", "likely", "may be", "could be", "possibly", "appears to"), OR no support staff member stated the cause at all (only a customer hypothesis, an automated RCA agent suggestion, or silence). Prefix with "Unconfirmed:" only in the second case.
+  If no investigation is present write []
 
 - ticket_ids: string array of ALL ticket IDs in this group
 

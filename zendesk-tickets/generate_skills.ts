@@ -59,7 +59,7 @@ function fetchTickets(connector: string, months: number): Promise<void> {
 // ---------------------------------------------------------------------------
 // Step 2: read metadata, return batches of ticket paths
 // ---------------------------------------------------------------------------
-async function readAndBatch(connector: string, batchSize = 50): Promise<string[][]> {
+async function readAndBatch(connector: string, batchSize = 30): Promise<string[][]> {
   const metadata = await fs.readFile(`/tmp/${connector}_tickets/metadata.md`, "utf8");
   const filenames: string[] = [];
   for (const line of metadata.split("\n")) {
@@ -182,7 +182,7 @@ ${rows}
 ## How to Use
 
 1. Find your connector in the table above
-2. Read \`{connector}/selection.md\` — maps symptoms and error keywords to specific issues
+2. Read \`{connector}/selection.md\` — lists known symptoms with a short description to find the right issue file
 3. Read the linked \`{slug}.md\` — full root causes, resolutions, and related tickets
 `;
 
