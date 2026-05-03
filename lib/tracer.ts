@@ -211,22 +211,37 @@ export class OrchestratorTracer {
     } catch { /* bodiesDir may not exist yet during live preview */ }
 
     // Build OTLP log indexes:
-    // - reqLogs by session (positional fallback for request body paths)
     // - resLogs by reqId (for session assignment when no span arrived)
-    const reqLogsBySession = new Map<string, RawLog[]>();
     const resLogByReqId = new Map<string, RawLog>();
     for (const l of this.logs) {
-      if (l.eventName === "api_request_body") {
-        if (!reqLogsBySession.has(l.sessionId)) reqLogsBySession.set(l.sessionId, []);
-        reqLogsBySession.get(l.sessionId)!.push(l);
-      } else if (l.eventName === "api_response_body") {
+      if (l.eventName === "api_response_body") {
         const reqId = String(l.attrs["request_id"] ?? "");
         if (reqId) resLogByReqId.set(reqId, l);
       }
     }
-    for (const logs of reqLogsBySession.values()) {
-      logs.sort((a, b) => a.sequence - b.sequence);
-    }
+
+    // Build request file index by session + previous_message_id chain.
+    // Request files are <uuid>.request.json; they carry session_id in metadata
+    // and previous_message_id in diagnostics, forming a reliable chain that
+    // doesn't depend on OTLP log ordering or delivery.
+    // Map: sessionId -> (previousMsgId|null -> filePath)
+    const reqFilesBySession = new Map<string, Map<string | null, string>>();
+    try {
+      for (const f of await fs.readdir(this.bodiesDir)) {
+        if (!f.endsWith(".request.json")) continue;
+        const filePath = path.join(this.bodiesDir, f);
+        try {
+          const body = JSON.parse(await fs.readFile(filePath, "utf8"));
+          const uid = JSON.parse(body.metadata?.user_id ?? "{}");
+          const sid = String(uid.session_id ?? "");
+          const prev = (body.diagnostics?.previous_message_id ?? null) as string | null;
+          if (sid) {
+            if (!reqFilesBySession.has(sid)) reqFilesBySession.set(sid, new Map());
+            reqFilesBySession.get(sid)!.set(prev, filePath);
+          }
+        } catch { /* skip malformed */ }
+      }
+    } catch { /* bodiesDir may not exist yet */ }
 
     // Assign each reqId to a session: spans > OTLP response logs > orphan synthetic session
     const sessionByReqId = new Map<string, string>();
@@ -269,13 +284,17 @@ export class OrchestratorTracer {
     for (const [sid, reqIds] of sessionReqIds) {
       const info = agentInfoBySession.get(sid) ?? { name: `session_${sid.slice(0, 8)}`, type: "unknown" };
       const run: AgentRun = { name: info.name, type: info.type, sessionId: sid, turns: [] };
-      const reqLogs = reqLogsBySession.get(sid) ?? [];
+      const sessionReqFiles = reqFilesBySession.get(sid) ?? new Map<string | null, string>();
+
+      // Chain: first request has previous_message_id=null; each subsequent request
+      // points to the response id of the previous turn.
+      let prevMsgId: string | null = null;
 
       for (let i = 0; i < reqIds.length; i++) {
         const reqId = reqIds[i];
         const resFilePath = resFileByReqId.get(reqId)!;
-        // Request body: positional match within session (request logs arrive in order)
-        const reqFilePath = String(reqLogs[i]?.attrs["body_ref"] ?? "");
+        // Request body: chain-based match via previous_message_id → response.id
+        const reqFilePath = sessionReqFiles.get(prevMsgId) ?? "";
 
         let reqBody: any = {};
         let resBody: any = {};
@@ -325,6 +344,9 @@ export class OrchestratorTracer {
           durationMs, ttftMs, stopReason,
           systemPrompt, messages, tools, responseText, toolUses,
         });
+
+        // Advance chain: next request's previous_message_id = this response's id
+        prevMsgId = String(resBody.id ?? "") || prevMsgId;
       }
 
       if (run.turns.length > 0) runs.set(sid, run);
