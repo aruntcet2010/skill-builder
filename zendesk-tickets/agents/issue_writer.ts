@@ -4,8 +4,7 @@ import type { Symptom } from "./types.js";
 function buildPrompt(symptom: Symptom, ticketPaths: string[], outputPath: string): string {
   return `You are a support ticket analyst writing a detailed oncall issue file.
 
-Symptom: ${symptom.title}
-Root cause hint (from prior analysis — use as a starting point, verify against tickets): ${symptom.root_cause || "none"}
+Problem: ${symptom.title}
 Output file: ${outputPath}
 
 Read each of the following ticket files using the Read tool:
@@ -40,8 +39,11 @@ Rules:
 - If all tickets share the same root cause, write only one Cause section
 - Order resolution steps by what actually resolved the ticket first — put the confirmed fix before alternatives or workarounds
 - If a resolution step was tried in a ticket but abandoned in favour of a different approach, do not include the abandoned step
-- If a resolution was not confirmed by the customer or agent (ticket closed without confirmation, or root cause marked as unknown), say so explicitly — do not present unverified explanations as confirmed facts
-- Do not generalise code examples, API endpoints, or commands beyond what the tickets explicitly show — if an example only applies to a specific object type or configuration, scope it accordingly
+- If a resolution was not confirmed by the customer or support staff (ticket closed without confirmation, root cause marked as unknown, or support staff used words like "suspect", "likely", "may be"), say so explicitly — do not present unverified explanations as confirmed facts; prefix such statements with "Unconfirmed:" in the file
+- Do not generalise code examples, API endpoints, or commands beyond what the tickets explicitly show — if an example only applies to a specific object type or configuration, scope it accordingly; replace any ticket-specific values (field names, IDs, table names) with placeholders like <field_name> or <object_type> unless the specific value is itself the point of the example
+- Every Cause section must include its own concrete resolution steps — do not substitute a reference or pointer to another Cause section; if the ticket only explains why the problem occurs without a confirmed fix, state what the customer was advised and whether it was confirmed
+- Do not include customer or company names — use "a customer" or "affected accounts" instead
+- Do not include support tier labels (L1, L2, L3) — use "escalated internally" instead
 - Read the output file path before writing to it (even if it does not exist yet — that is fine)
 - Write the file when done — do not return the content as text`;
 }
