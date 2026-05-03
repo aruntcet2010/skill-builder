@@ -60,7 +60,7 @@ function fetchTickets(connector: string, months: number): Promise<void> {
 // ---------------------------------------------------------------------------
 // Step 2: read metadata, return batches of ticket paths
 // ---------------------------------------------------------------------------
-async function readAndBatch(connector: string, batchSize = 30): Promise<string[][]> {
+async function readAndBatch(connector: string, maxBatchBytes = 200_000): Promise<string[][]> {
   const metadata = await fs.readFile(`${TMP_DIR}/${connector}_tickets/metadata.md`, "utf8");
   const filenames: string[] = [];
   for (const line of metadata.split("\n")) {
@@ -69,11 +69,23 @@ async function readAndBatch(connector: string, batchSize = 30): Promise<string[]
   }
   const base = `${TMP_DIR}/${connector}_tickets`;
   const paths = filenames.map(f => path.join(base, f));
+  const sizes = await Promise.all(paths.map(p => fs.stat(p).then(s => s.size)));
+
   const batches: string[][] = [];
-  for (let i = 0; i < paths.length; i += batchSize) {
-    batches.push(paths.slice(i, i + batchSize));
+  let current: string[] = [];
+  let currentBytes = 0;
+  for (let i = 0; i < paths.length; i++) {
+    if (current.length > 0 && currentBytes + sizes[i] > maxBatchBytes) {
+      batches.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(paths[i]);
+    currentBytes += sizes[i];
   }
-  console.log(`  [${connector}] ${paths.length} tickets → ${batches.length} batches`);
+  if (current.length > 0) batches.push(current);
+
+  console.log(`  [${connector}] ${paths.length} tickets → ${batches.length} batches (max ${Math.round(maxBatchBytes / 1024)}KB each)`);
   return batches;
 }
 
