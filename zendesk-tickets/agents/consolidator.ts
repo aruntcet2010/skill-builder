@@ -56,7 +56,7 @@ export async function runConsolidator(
   const rawStream = query({
     prompt,
     options: {
-      model: "claude-sonnet-4-6",
+      model: "claude-opus-4-7",
       tools: ["Read", "Write"],
       permissionMode: "bypassPermissions",
       settingSources: [],
